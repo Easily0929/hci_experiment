@@ -193,120 +193,119 @@ export default function HCIExperimentPlatform() {
     }
   };
   // --- 语音识别 (二进制协议修复版) ---
+  // --- 语音识别 (手动解码通用版) ---
   const handleMicClick = () => {
-      // ⚠️ 填入你的真实信息
+      // ⚠️ 请填入你的真实信息 (确保去掉了空格)
       const MY_APPID = "2167852377"; 
       const MY_TOKEN = "ZtBt5W3f5JbujzshhrAjwVrC0aueKE8l";
-      // 大模型版请用 "volcengine_input_common"，普通版用 "volcengine_streaming_common"
-      const MY_CLUSTER = "volcengine_input_common"; 
-      const MY_UID = "user_001";
+      
+      // 🟢 关键：我们退回到最稳定的“普通版/通用版”集群
+      // 请务必确认你在火山引擎控制台开通了“流式语音识别-通用-中文”
+      const MY_CLUSTER = "volcengine_streaming_common"; 
 
       if (isRecording) {
-          // 停止录音
+          // 停止录音并发送
           if(rec) {
             rec.stop((blob: Blob, duration: number) => {
                 setIsRecording(false);
                 setInteractionState('process');
                 
-                // --- 核心修改：构建二进制协议 ---
                 const reader = new FileReader();
                 reader.onloadend = () => {
-                    const audioData = new Uint8Array(reader.result as ArrayBuffer);
+                    const arrayBuffer = reader.result as ArrayBuffer;
                     const wsUrl = `wss://openspeech.bytedance.com/api/v2/asr`;
                     const ws = new WebSocket(wsUrl);
-                    ws.binaryType = "arraybuffer";
-
-                    // 🛠️ 辅助函数：构建火山引擎需要的 4 字节 Header + Size + Payload
-                    // 协议格式：[Header(4B)][Size(4B)][Payload(N bytes)]
-                    // Header: Version(4bit) | HeaderSize(4bit) | MsgType(4bit) | Flags(4bit) | Serial(4bit) | Comp(4bit) | Reserved(8bit)
-                    const buildMsg = (type: number, payload: Uint8Array, isGzip = false) => {
-                        const header = new Uint8Array(4);
-                        // Byte 0: Version(0001) + HeaderSize(0001) = 0x11
-                        header[0] = 0x11; 
-                        // Byte 1: MsgType(full_client_request=1, audio=2) + Flags(0)
-                        header[1] = (type << 4) | 0x00; 
-                        // Byte 2: Serial(JSON=1) + Comp(Gzip=1, None=0)
-                        header[2] = (0x01 << 4) | (isGzip ? 0x01 : 0x00);
-                        // Byte 3: Reserved
-                        header[3] = 0x00;
-
-                        const sizeBytes = new Uint8Array(4);
-                        // Big Endian 写入 payload 长度
-                        new DataView(sizeBytes.buffer).setInt32(0, payload.length, false);
-
-                        const pkg = new Uint8Array(4 + 4 + payload.length);
-                        pkg.set(header, 0);
-                        pkg.set(sizeBytes, 4);
-                        pkg.set(payload, 8);
-                        return pkg;
-                    };
-
+                    
+                    // 🔥 核心魔法 1：告诉浏览器，收到的数据当作二进制处理，不要自作多强去解析文本
+                    ws.binaryType = "arraybuffer"; 
+                    
                     ws.onopen = () => {
-                        console.log("WS Open. Sending Full Client Request...");
+                        console.log("WS Connected. Sending data...");
                         
-                        // 1. 构建 JSON Payload
-                        const reqPayload = JSON.stringify({
+                        // 1. 发送 Start (用最简单的 JSON 发送，不折腾二进制头)
+                        ws.send(JSON.stringify({
                             app: { appid: MY_APPID, token: MY_TOKEN, cluster: MY_CLUSTER },
-                            user: { uid: MY_UID },
+                            user: { uid: sessionId },
                             request: {
                                 event: "Start", 
                                 reqid: uuidv4(), 
                                 workflow: "audio_in,resample,partition,vad,asr,itn,punctuation",
                                 audio: { format: "pcm", rate: 16000, bits: 16, channel: 1, codec: "raw" },
+                                // 告诉服务器尽量回传 JSON
                                 result: { encoding: "utf-8", format: "json" }
                             }
-                        });
-                        const textEncoder = new TextEncoder();
-                        // 发送 Full Client Request (Type=1)
-                        ws.send(buildMsg(1, textEncoder.encode(reqPayload)));
-
-                        // 2. 发送 Audio Only Request (Type=2)
-                        // 注意：真实流式应该切片，这里为了演示发整包，且假设音频不大
-                        // 如果音频很大，必须切片，且最后一包 Flags 要置为 0x02
-                        // 这里简化处理：构造一个音频包
-                        const audioHeader = new Uint8Array(4);
-                        audioHeader[0] = 0x11;
-                        audioHeader[1] = (0x02 << 4) | 0x02; // Type=2, Flags=2 (最后一包)
-                        audioHeader[2] = (0x00 << 4) | 0x00; // No serialization, No compression
-                        audioHeader[3] = 0x00;
+                        }));
                         
-                        const audioSize = new Uint8Array(4);
-                        new DataView(audioSize.buffer).setInt32(0, audioData.length, false);
+                        // 2. 发送音频 (切片发送，更稳)
+                        const chunkSize = 4096; 
+                        let offset = 0;
+                        const uint8Data = new Uint8Array(arrayBuffer);
                         
-                        const audioPkg = new Uint8Array(8 + audioData.length);
-                        audioPkg.set(audioHeader, 0);
-                        audioPkg.set(audioSize, 4);
-                        audioPkg.set(audioData, 8);
-                        
-                        ws.send(audioPkg);
+                        const loop = setInterval(() => {
+                            if (ws.readyState !== WebSocket.OPEN) {
+                                clearInterval(loop);
+                                return;
+                            }
+                            if (offset >= uint8Data.length) {
+                                clearInterval(loop);
+                                // 3. 发送 Stop
+                                ws.send(JSON.stringify({
+                                    app: { appid: MY_APPID, token: MY_TOKEN, cluster: MY_CLUSTER },
+                                    request: { event: "Stop" }
+                                }));
+                                return;
+                            }
+                            const end = Math.min(offset + chunkSize, uint8Data.length);
+                            ws.send(uint8Data.slice(offset, end));
+                            offset += chunkSize;
+                        }, 10);
                     };
                     
                     ws.onmessage = (e) => {
-                        // 解析响应：也是 Header + Size + Payload
-                        // 简化处理：直接跳过前 8 字节读 Payload (假设是 JSON)
+                        // 🔥 核心魔法 2：手动把服务器发回来的“乱码”翻译成文字
                         try {
-                            const respData = new Uint8Array(e.data as ArrayBuffer);
-                            // 校验 Header (0x19 0x00 0x00 0x00 通常是 Response)
-                            if (respData.length > 8) {
-                                const payload = respData.slice(8);
+                            let jsonString = "";
+                            if (typeof e.data === 'string') {
+                                jsonString = e.data;
+                            } else {
+                                // 如果是二进制，手动解码
                                 const decoder = new TextDecoder('utf-8');
-                                const jsonStr = decoder.decode(payload);
-                                // console.log("Raw Resp:", jsonStr);
-                                
-                                const data = JSON.parse(jsonStr);
-                                if (data.result && data.result.text) {
-                                    ws.close();
-                                    processMessageExchange(data.result.text);
-                                }
+                                jsonString = decoder.decode(e.data);
+                            }
+                            
+                            console.log("Raw Response:", jsonString);
+                            
+                            // 尝试解析 JSON
+                            // 注意：有时候服务器会把 gzip 数据当做文本发过来，解析会失败，这里做了容错
+                            const data = JSON.parse(jsonString);
+
+                            // 检查错误
+                            if (data.code !== 1000 && data.message) {
+                                alert(`火山引擎报错: ${data.message} (Code: ${data.code})`);
+                                ws.close();
+                                return;
+                            }
+
+                            if (data.result && data.result.text) {
+                                 const text = data.result.text;
+                                 ws.close();
+                                 if(text.trim()) processMessageExchange(text);
                             }
                         } catch (err) {
-                            console.error("Parse Error:", err);
+                            console.warn("非 JSON 消息 (可能是压缩数据，已忽略):", err);
                         }
                     };
                     
+                    ws.onclose = (e) => {
+                        // 如果非正常关闭 (1000是正常关闭)
+                        if (e.code !== 1000) {
+                            console.error("WS Close:", e);
+                            // 这里不弹窗了，避免干扰，主要看 onmessage 的报错
+                        }
+                    };
+
                     ws.onerror = (e) => {
                         console.error("WS Error:", e);
-                        alert("连接失败，请检查 Cluster 是否匹配");
                         setInteractionState('idle');
                     };
                 };
