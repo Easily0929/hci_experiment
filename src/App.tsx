@@ -192,8 +192,12 @@ export default function HCIExperimentPlatform() {
       setInteractionState('idle');
     }
   };
-  // --- 语音识别 (适配普通版通用集群) ---
+  // --- 语音识别 (万能调试版) ---
   const handleMicClick = () => {
+      // ⚠️ 再次确认：这里填你的真实 AppID 和 Token
+      const MY_APPID = "2167852377"; 
+      const MY_TOKEN = "ZtBt5W3f5JbujzshhrAjwVrC0aueKE8l";
+
       if (isRecording) {
           // 停止录音并发送
           if(rec) {
@@ -207,16 +211,18 @@ export default function HCIExperimentPlatform() {
                     const wsUrl = `wss://openspeech.bytedance.com/api/v2/asr`;
                     const ws = new WebSocket(wsUrl);
                     
+                    // 🔥 关键修改 1：开启二进制接收模式，防止 UTF-8 报错
+                    ws.binaryType = "arraybuffer";
+                    
                     ws.onopen = () => {
-                        console.log("正在连接火山引擎 (普通版)...");
+                        console.log("已连接，发送数据中...");
                         
-                        // 1. 发送 Start 指令
-                        // 🔴 改回了普通版集群
+                        // 发送 Start 指令 (使用大模型集群)
                         ws.send(JSON.stringify({
                             app: { 
-                                appid: volcAppId, 
-                                token: volcToken, 
-                                cluster: "volcengine_streaming_common" 
+                                appid: MY_APPID, 
+                                token: MY_TOKEN, 
+                                cluster: "volcengine_input_common" 
                             },
                             user: { uid: sessionId },
                             request: {
@@ -229,48 +235,64 @@ export default function HCIExperimentPlatform() {
                                     bits: 16, 
                                     channel: 1, 
                                     codec: "raw" 
-                                }
-                                // 🔴 注意：普通版去掉了 result 字段，防止协议冲突
+                                },
+                                result: { encoding: "utf-8", format: "json" }
                             }
                         }));
                         
-                        // 2. 发送音频数据
+                        // 发送音频
                         ws.send(new Uint8Array(arrayBuffer));
                         
-                        // 3. 发送 Stop 指令
+                        // 发送 Stop 指令
                         ws.send(JSON.stringify({
                             app: { 
-                                appid: volcAppId, 
-                                token: volcToken, 
-                                cluster: "volcengine_streaming_common" 
+                                appid: MY_APPID, 
+                                token: MY_TOKEN, 
+                                cluster: "volcengine_input_common" 
                             },
                             request: { event: "Stop" }
                         }));
                     };
                     
                     ws.onmessage = (e) => {
-                        const data = JSON.parse(e.data);
-                        // 调试日志
-                        console.log("ASR:", data);
+                        // 🔥 关键修改 2：手动翻译服务器返回的数据
+                        let messageText = "";
                         
-                        // 错误捕获
-                        if (data.code !== 1000 && data.message) {
-                            alert(`ASR Error [${data.code}]: ${data.message}`);
-                            ws.close();
-                            return;
+                        if (typeof e.data === "string") {
+                            messageText = e.data;
+                        } else if (e.data instanceof ArrayBuffer) {
+                            // 如果收到的是二进制，用解码器转成文字
+                            const decoder = new TextDecoder("utf-8");
+                            messageText = decoder.decode(e.data);
+                            console.log("收到二进制转换消息:", messageText);
                         }
 
-                        if (data.result && data.result.text) {
-                             const text = data.result.text;
-                             ws.close();
-                             if(text.trim()) processMessageExchange(text);
-                             else setInteractionState('idle'); 
+                        // 现在我们可以解析 JSON 了，不会报错了
+                        try {
+                            const data = JSON.parse(messageText);
+                            console.log("火山引擎完整回复:", data);
+
+                            // 🚨 错误捕获：这里会显示真正的错误原因！
+                            if (data.code !== 1000 && data.message) {
+                                alert(`火山引擎拒绝请求:\nCode: ${data.code}\nMsg: ${data.message}`);
+                                ws.close();
+                                return;
+                            }
+
+                            if (data.result && data.result.text) {
+                                 const text = data.result.text;
+                                 ws.close();
+                                 if(text.trim()) processMessageExchange(text);
+                                 else setInteractionState('idle'); 
+                            }
+                        } catch (err) {
+                            console.error("解析失败:", err);
                         }
                     };
                     
                     ws.onerror = (e) => {
                         console.error("WS Error:", e);
-                        alert("连接断开。请检查控制台 Network -> WS -> Messages 里的 Status Code");
+                        // 这次 onerror 应该不会触发了，因为我们在 onmessage 里拦截了
                         setInteractionState('idle');
                     };
                 };
@@ -279,7 +301,6 @@ export default function HCIExperimentPlatform() {
           }
       } else {
           // 开始录音
-          if (!volcAppId || !volcToken) { alert("Admin配置缺失"); return; }
           const newRec = Recorder({ type: "pcm", bitRate: 16, sampleRate: 16000, bufferSize: 4096 });
           newRec.open(() => {
               newRec.start();
