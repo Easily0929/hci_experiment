@@ -1,10 +1,11 @@
 import React from 'react';
 
-export default function HCIExperimentPlatform() {
+export default function App() {
+  console.log("App is running!"); // 这行会在控制台打印日志
   return (
-    <div className="p-10 bg-blue-500 text-white min-h-screen">
-      <h1 className="text-4xl font-bold">Hello World!</h1>
-      <p>如果能看到这个，说明环境是好的，是原来的代码有问题。</p>
+    <div style={{ color: 'red', fontSize: '30px', padding: '50px' }}>
+      <h1>测试成功！</h1>
+      <p>如果你能看到这行字，说明环境没问题，是之前的代码有 Bug。</p>
     </div>
   );
 }
