@@ -23,7 +23,7 @@ const supabase = SUPABASE_URL && SUPABASE_ANON_KEY && SUPABASE_URL.startsWith('h
 
 // --- 默认配置 ---
 const VOLC_APPID_DEFAULT = "2167852377"; 
-const VOLC_TOKEN_DEFAULT = "ZtBt5W3f5JbujzshhrAjwVrC0aueKE8l";
+const VOLC_TOKEN_DEFAULT = "ZtBt5W3f5JbujzshhrAjwVrC0aueKE8I";
 
 // --- 类型定义 ---
 type Condition = 'AI_Model' | 'Human_Partner';
