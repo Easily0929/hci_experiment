@@ -1,14 +1,12 @@
-import * as React from 'react';
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+// 确保引入的文件名是 './App'，且你的 App.tsx 是默认导出 (export default)
+import App from './App'
+// 如果你有 index.css 可以在这里引入，没有也没关系
+import './style.css' 
 
-import App from './App';
-
-const rootElement = document.getElementById('root');
-const root = createRoot(rootElement);
-
-root.render(
-  <StrictMode>
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
     <App />
-  </StrictMode>
-);
+  </React.StrictMode>,
+)
