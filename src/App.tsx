@@ -21,7 +21,7 @@ const supabase = SUPABASE_URL && SUPABASE_ANON_KEY && SUPABASE_URL.startsWith('h
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
 
-// --- 默认配置 (方便测试，生产环境请在 Admin 修改) ---
+// --- 默认配置 ---
 const VOLC_APPID_DEFAULT = "2167852377"; 
 const VOLC_TOKEN_DEFAULT = "ZtBt5W3f5JbujzshhrAjwVrC0aueKE8l";
 
@@ -104,7 +104,7 @@ export default function HCIExperimentPlatform() {
       id: 'default_silicon',
       alias: 'SiliconFlow - DeepSeek',
       url: 'https://api.siliconflow.cn/v1/chat/completions',
-      key: '', // 这里空着没关系，去 Admin 填
+      key: '', // 需在Admin填写
       modelName: 'deepseek-ai/DeepSeek-V2.5',
     },
   ]);
@@ -120,15 +120,19 @@ export default function HCIExperimentPlatform() {
   // --- 数据上传 ---
   const uploadToCloud = async (msg: Message) => {
     if (!supabase) return;
-    await supabase.from('experiment_logs').insert({
-      session_id: msg.sessionId,
-      participant_name: msg.participantName,
-      condition: msg.condition,
-      role: msg.role,
-      content: msg.content,
-      latency: msg.latency || 0,
-      timestamp: new Date(msg.timestamp).toISOString(), 
-    });
+    try {
+        await supabase.from('experiment_logs').insert({
+        session_id: msg.sessionId,
+        participant_name: msg.participantName,
+        condition: msg.condition,
+        role: msg.role,
+        content: msg.content,
+        latency: msg.latency || 0,
+        timestamp: new Date(msg.timestamp).toISOString(), 
+        });
+    } catch (error) {
+        console.error("Upload failed", error);
+    }
   };
 
   const handleLogin = () => {
@@ -139,7 +143,7 @@ export default function HCIExperimentPlatform() {
     setCurrentView('participant');
   };
 
-  // --- 核心交互逻辑 ---
+  // --- 核心交互逻辑 (文字/语音共用) ---
   const processMessageExchange = async (userText: string) => {
     setInteractionState('process');
     const userMsg: Message = {
@@ -152,7 +156,7 @@ export default function HCIExperimentPlatform() {
     uploadToCloud(userMsg);
 
     try {
-      if (!activeConfig?.key) throw new Error('AI API Key missing. Check Admin settings.');
+      if (!activeConfig?.key) throw new Error('AI API Key missing. Please check Admin settings (Lock icon).');
       
       const startProcess = Date.now();
       const systemMsg = { role: 'system', content: assignedCondition === 'AI_Model' ? prompts.ai : prompts.human };
@@ -188,7 +192,8 @@ export default function HCIExperimentPlatform() {
       setInteractionState('idle');
     }
   };
- // --- 语音识别 (Recorder -> WebSocket -> Volcengine) ---
+
+  // --- 语音识别 (适配大模型版) ---
   const handleMicClick = () => {
       if (isRecording) {
           // 停止录音并发送
@@ -204,17 +209,21 @@ export default function HCIExperimentPlatform() {
                     const ws = new WebSocket(wsUrl);
                     
                     ws.onopen = () => {
+                        console.log("Connect to Volcengine (Input Common)...");
+                        
                         // 1. 发送 Start 指令
-                        // 🔴 重点：集群名改回 "volcengine_streaming_common" (对应你截图里的通用版)
                         ws.send(JSON.stringify({
-                            app: { appid: volcAppId, token: volcToken, cluster: "volcengine_streaming_common" },
+                            app: { 
+                                appid: volcAppId, 
+                                token: volcToken, 
+                                cluster: "volcengine_input_common" // 大模型专用集群
+                            },
                             user: { uid: sessionId },
                             request: {
                                 event: "Start", 
                                 reqid: uuidv4(), 
                                 workflow: "audio_in,resample,partition,vad,asr,itn,punctuation",
                                 audio: { format: "pcm", rate: 16000, bits: 16, channel: 1, codec: "raw" },
-                                // 🔴 重点：强制要求服务器返回 JSON 格式，防止乱码
                                 result: { encoding: "utf-8", format: "json" }
                             }
                         }));
@@ -224,17 +233,23 @@ export default function HCIExperimentPlatform() {
                         
                         // 3. 发送 Stop 指令
                         ws.send(JSON.stringify({
-                            app: { appid: volcAppId, token: volcToken, cluster: "volcengine_streaming_common" },
+                            app: { 
+                                appid: volcAppId, 
+                                token: volcToken, 
+                                cluster: "volcengine_input_common" // 必须一致
+                            },
                             request: { event: "Stop" }
                         }));
                     };
                     
                     ws.onmessage = (e) => {
                         const data = JSON.parse(e.data);
-                        // 调试：看看服务器到底回了啥
-                        console.log("ASR Response:", data);
-                        
-                        // 成功识别
+                        // 如果有错误信息
+                        if (data.code !== 1000 && data.message) {
+                            alert(`ASR Error [${data.code}]: ${data.message}`);
+                            ws.close();
+                            return;
+                        }
                         if (data.result && data.result.text) {
                              const text = data.result.text;
                              ws.close();
@@ -244,8 +259,8 @@ export default function HCIExperimentPlatform() {
                     };
                     
                     ws.onerror = (e) => {
-                        console.error("ASR Error:", e);
-                        // 这里的 alert 可能会在 console 看到更详细的信息
+                        console.error("WS Error:", e);
+                        alert("连接失败。请检查 Admin 中的 AppID/Token 以及控制台服务是否开通。");
                         setInteractionState('idle');
                     };
                 };
@@ -254,7 +269,7 @@ export default function HCIExperimentPlatform() {
           }
       } else {
           // 开始录音
-          if (!volcAppId || !volcToken) { alert("请在 Admin 配置火山引擎参数"); return; }
+          if (!volcAppId || !volcToken) { alert("Please configure Volcengine in Admin"); return; }
           const newRec = Recorder({ type: "pcm", bitRate: 16, sampleRate: 16000, bufferSize: 4096 });
           newRec.open(() => {
               newRec.start();
@@ -264,7 +279,8 @@ export default function HCIExperimentPlatform() {
           }, (msg:string) => alert("麦克风启动失败: " + msg));
       }
   };
-  // --- 管理员视图 (已修复！包含所有输入框) ---
+
+  // --- 管理员视图 ---
   const AdminView = () => {
     const addNewModel = () => {
       setModelList([...modelList, { id: uuidv4(), alias: 'New', url: 'https://api.siliconflow.cn/v1/chat/completions', key: '', modelName: '' }]);
@@ -300,7 +316,7 @@ export default function HCIExperimentPlatform() {
                     </div>
                 </div>
 
-                {/* 2. LLM 模型配置 (这是之前丢失的部分，现在加回来了！) */}
+                {/* 2. LLM 模型配置 */}
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
                     <h3 className="font-bold text-blue-400 flex items-center gap-2"><Activity size={18}/> LLM Models (AI Brain)</h3>
@@ -327,7 +343,7 @@ export default function HCIExperimentPlatform() {
     );
   };
 
-  // --- 视图渲染 (保持不变) ---
+  // --- 视图渲染 ---
   const LoginView = () => (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
       <div className="bg-white p-8 rounded-xl shadow-xl w-full max-w-md">
