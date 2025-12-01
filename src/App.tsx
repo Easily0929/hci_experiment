@@ -192,11 +192,15 @@ export default function HCIExperimentPlatform() {
       setInteractionState('idle');
     }
   };
-  // --- 语音识别 (万能调试版) ---
+// --- 语音识别 (切片发送修复版) ---
   const handleMicClick = () => {
-      // ⚠️ 再次确认：这里填你的真实 AppID 和 Token
+      // ⚠️ 再次确认：填入你的真实信息 (请确保没有空格)
       const MY_APPID = "2167852377"; 
       const MY_TOKEN = "ZtBt5W3f5JbujzshhrAjwVrC0aueKE8l";
+      // 如果你确认开通了“流式语音识别-通用-中文”，请用 "volcengine_streaming_common"
+      // 如果你只开通了“大模型”，请用 "volcengine_input_common"
+      // 建议：先试 "volcengine_input_common" (对应你最早的截图)
+      const MY_CLUSTER = "volcengine_input_common"; 
 
       if (isRecording) {
           // 停止录音并发送
@@ -211,88 +215,85 @@ export default function HCIExperimentPlatform() {
                     const wsUrl = `wss://openspeech.bytedance.com/api/v2/asr`;
                     const ws = new WebSocket(wsUrl);
                     
-                    // 🔥 关键修改 1：开启二进制接收模式，防止 UTF-8 报错
-                    ws.binaryType = "arraybuffer";
+                    ws.binaryType = "arraybuffer"; // 允许接收二进制
                     
                     ws.onopen = () => {
-                        console.log("已连接，发送数据中...");
+                        console.log("WS Open. Sending Start...");
                         
-                        // 发送 Start 指令 (使用大模型集群)
+                        // 1. 发送 Start 指令
                         ws.send(JSON.stringify({
-                            app: { 
-                                appid: MY_APPID, 
-                                token: MY_TOKEN, 
-                                cluster: "volcengine_input_common" 
-                            },
+                            app: { appid: MY_APPID, token: MY_TOKEN, cluster: MY_CLUSTER },
                             user: { uid: sessionId },
                             request: {
                                 event: "Start", 
                                 reqid: uuidv4(), 
                                 workflow: "audio_in,resample,partition,vad,asr,itn,punctuation",
-                                audio: { 
-                                    format: "pcm", 
-                                    rate: 16000, 
-                                    bits: 16, 
-                                    channel: 1, 
-                                    codec: "raw" 
-                                },
-                                result: { encoding: "utf-8", format: "json" }
+                                audio: { format: "pcm", rate: 16000, bits: 16, channel: 1, codec: "raw" },
+                                // 🔴 关键修复：强制不压缩，防止乱码
+                                result: { encoding: "utf-8", format: "json", compress: "raw" }
                             }
                         }));
                         
-                        // 发送音频
-                        ws.send(new Uint8Array(arrayBuffer));
+                        // 2. 切片发送音频 (防止包太大报错)
+                        const chunkSize = 4096; // 每次发 4KB
+                        let offset = 0;
+                        const uint8Data = new Uint8Array(arrayBuffer);
                         
-                        // 发送 Stop 指令
-                        ws.send(JSON.stringify({
-                            app: { 
-                                appid: MY_APPID, 
-                                token: MY_TOKEN, 
-                                cluster: "volcengine_input_common" 
-                            },
-                            request: { event: "Stop" }
-                        }));
+                        const sendLoop = setInterval(() => {
+                            if (offset >= uint8Data.length) {
+                                clearInterval(sendLoop);
+                                // 发送完毕后，发送 Stop
+                                ws.send(JSON.stringify({
+                                    app: { appid: MY_APPID, token: MY_TOKEN, cluster: MY_CLUSTER },
+                                    request: { event: "Stop" }
+                                }));
+                                console.log("Audio sent done.");
+                                return;
+                            }
+                            
+                            const end = Math.min(offset + chunkSize, uint8Data.length);
+                            const chunk = uint8Data.slice(offset, end);
+                            ws.send(chunk);
+                            offset += chunkSize;
+                        }, 10); // 每 10ms 发送一包
                     };
                     
                     ws.onmessage = (e) => {
-                        // 🔥 关键修改 2：手动翻译服务器返回的数据
-                        let messageText = "";
-                        
-                        if (typeof e.data === "string") {
-                            messageText = e.data;
-                        } else if (e.data instanceof ArrayBuffer) {
-                            // 如果收到的是二进制，用解码器转成文字
-                            const decoder = new TextDecoder("utf-8");
-                            messageText = decoder.decode(e.data);
-                            console.log("收到二进制转换消息:", messageText);
-                        }
-
-                        // 现在我们可以解析 JSON 了，不会报错了
+                        // 尝试解析
                         try {
-                            const data = JSON.parse(messageText);
-                            console.log("火山引擎完整回复:", data);
+                            let jsonString = e.data;
+                            if (typeof e.data !== 'string') {
+                                const decoder = new TextDecoder('utf-8');
+                                jsonString = decoder.decode(e.data);
+                            }
+                            
+                            const data = JSON.parse(jsonString);
+                            console.log("ASR Recv:", data);
 
-                            // 🚨 错误捕获：这里会显示真正的错误原因！
                             if (data.code !== 1000 && data.message) {
-                                alert(`火山引擎拒绝请求:\nCode: ${data.code}\nMsg: ${data.message}`);
+                                console.error("ASR Server Error:", data);
+                                // 如果是最后一包报错，才弹窗，防止中间状态干扰
+                                if(data.code !== 1000) alert(`ASR Error: ${data.message}`);
                                 ws.close();
                                 return;
                             }
 
                             if (data.result && data.result.text) {
                                  const text = data.result.text;
-                                 ws.close();
-                                 if(text.trim()) processMessageExchange(text);
-                                 else setInteractionState('idle'); 
+                                 // 只有拿到有效文本才更新
+                                 if(text.trim()) {
+                                     ws.close();
+                                     processMessageExchange(text);
+                                 }
                             }
                         } catch (err) {
-                            console.error("解析失败:", err);
+                            console.warn("Non-JSON message:", e.data);
                         }
                     };
                     
                     ws.onerror = (e) => {
                         console.error("WS Error:", e);
-                        // 这次 onerror 应该不会触发了，因为我们在 onmessage 里拦截了
+                        // 静默失败，等待 onmessage 里的详细报错
                         setInteractionState('idle');
                     };
                 };
@@ -307,7 +308,7 @@ export default function HCIExperimentPlatform() {
               setRec(newRec);
               setIsRecording(true);
               setInteractionState('listen');
-          }, (msg:string) => alert("麦克风失败: " + msg));
+          }, (msg:string) => alert("Mic Error: " + msg));
       }
   };
   // --- 管理员视图 ---
