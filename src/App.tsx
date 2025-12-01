@@ -188,7 +188,6 @@ export default function HCIExperimentPlatform() {
       setInteractionState('idle');
     }
   };
-
   // --- 语音识别 (Recorder -> WebSocket -> Volcengine) ---
   const handleMicClick = () => {
       if (isRecording) {
@@ -205,34 +204,47 @@ export default function HCIExperimentPlatform() {
                     const ws = new WebSocket(wsUrl);
                     
                     ws.onopen = () => {
+                        // 1. 发送 Start 指令
+                        // 🔴 关键修改：cluster 改成了 "volcengine_input_common"
                         ws.send(JSON.stringify({
-                            app: { appid: volcAppId, token: volcToken, cluster: "volcengine_streaming_common" },
+                            app: { appid: volcAppId, token: volcToken, cluster: "volcengine_input_common" },
                             user: { uid: sessionId },
                             request: {
-                                event: "Start", reqid: uuidv4(), workflow: "audio_in,resample,partition,vad,asr,itn,punctuation",
+                                event: "Start", 
+                                reqid: uuidv4(), 
+                                workflow: "audio_in,resample,partition,vad,asr,itn,punctuation",
                                 audio: { format: "pcm", rate: 16000, bits: 16, channel: 1, codec: "raw" },
                             }
                         }));
+                        
+                        // 2. 发送音频二进制数据
                         ws.send(new Uint8Array(arrayBuffer));
+                        
+                        // 3. 发送 Stop 指令
+                        // 🔴 关键修改：cluster 改成了 "volcengine_input_common"
                         ws.send(JSON.stringify({
-                            app: { appid: volcAppId, token: volcToken, cluster: "volcengine_streaming_common" },
+                            app: { appid: volcAppId, token: volcToken, cluster: "volcengine_input_common" },
                             request: { event: "Stop" }
                         }));
                     };
                     
                     ws.onmessage = (e) => {
                         const data = JSON.parse(e.data);
+                        // 调试：打印结果看是否成功
+                        console.log("火山引擎返回:", data);
+                        
                         if (data.result && data.result.text) {
                              const text = data.result.text;
+                             // 只有当 sequence < 0 时才代表最终结束，但为了响应快，拿到字就关也没事
                              ws.close();
                              if(text.trim()) processMessageExchange(text);
-                             else setInteractionState('idle'); // 未识别到内容
+                             else setInteractionState('idle'); 
                         }
                     };
                     
                     ws.onerror = (e) => {
-                        console.error(e);
-                        alert("ASR Error. Check Volc AppID/Token.");
+                        console.error("ASR WebSocket Error:", e);
+                        alert("ASR Error. 请检查控制台日志。");
                         setInteractionState('idle');
                     };
                 };
@@ -242,17 +254,17 @@ export default function HCIExperimentPlatform() {
       } else {
           // 开始录音
           if (!volcAppId || !volcToken) { alert("Please configure Volcengine in Admin"); return; }
-          // 请求麦克风权限
+          
+          // 初始化录音
           const newRec = Recorder({ type: "pcm", bitRate: 16, sampleRate: 16000, bufferSize: 4096 });
           newRec.open(() => {
               newRec.start();
               setRec(newRec);
               setIsRecording(true);
               setInteractionState('listen');
-          }, (msg:string) => alert("Mic Error: " + msg));
+          }, (msg:string) => alert("麦克风打开失败: " + msg));
       }
   };
-
   // --- 管理员视图 (已修复！包含所有输入框) ---
   const AdminView = () => {
     const addNewModel = () => {
