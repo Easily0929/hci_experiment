@@ -22,8 +22,8 @@ const supabase = SUPABASE_URL && SUPABASE_ANON_KEY && SUPABASE_URL.startsWith('h
   : null;
 
 // --- 默认配置 ---
-const VOLC_APPID_DEFAULT = "2167852377"; 
-const VOLC_TOKEN_DEFAULT = "ZtBt5W3f5JbujzshhrAjwVrC0aueKE8I";
+const VOLC_APPID_DEFAULT = "2167852377";
+const VOLC_TOKEN_DEFAULT = "ZtBt5W3f5JbujzshhrAjwVrC0aueKE8l";
 
 // --- 类型定义 ---
 type Condition = 'AI_Model' | 'Human_Partner';
@@ -86,10 +86,10 @@ export default function HCIExperimentPlatform() {
   const [sessionId] = useState(() => uuidv4());
   const [participantName, setParticipantName] = useState('');
   const [assignedCondition, setAssignedCondition] = useState<Condition>('AI_Model');
-  const [selectedInputMode, setSelectedInputMode] = useState<InputMode>('voice'); 
+  const [selectedInputMode, setSelectedInputMode] = useState<InputMode>('voice');
   const [activeConfig, setActiveConfig] = useState<ModelConfig | null>(null);
   const [inputText, setInputText] = useState('');
-  
+
   // 火山引擎配置
   const [volcAppId, setVolcAppId] = useState(VOLC_APPID_DEFAULT);
   const [volcToken, setVolcToken] = useState(VOLC_TOKEN_DEFAULT);
@@ -121,17 +121,17 @@ export default function HCIExperimentPlatform() {
   const uploadToCloud = async (msg: Message) => {
     if (!supabase) return;
     try {
-        await supabase.from('experiment_logs').insert({
+      await supabase.from('experiment_logs').insert({
         session_id: msg.sessionId,
         participant_name: msg.participantName,
         condition: msg.condition,
         role: msg.role,
         content: msg.content,
         latency: msg.latency || 0,
-        timestamp: new Date(msg.timestamp).toISOString(), 
-        });
+        timestamp: new Date(msg.timestamp).toISOString(),
+      });
     } catch (error) {
-        console.error("Upload failed", error);
+      console.error("Upload failed", error);
     }
   };
 
@@ -157,7 +157,7 @@ export default function HCIExperimentPlatform() {
 
     try {
       if (!activeConfig?.key) throw new Error('AI API Key missing. Please check Admin settings (Lock icon).');
-      
+
       const startProcess = Date.now();
       const systemMsg = { role: 'system', content: assignedCondition === 'AI_Model' ? prompts.ai : prompts.human };
       const apiMessages = [systemMsg, ...newHistory.map(l => ({ role: (l.role === 'partner' ? 'assistant' : 'user') as any, content: l.content }))];
@@ -169,7 +169,7 @@ export default function HCIExperimentPlatform() {
       });
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
-      
+
       const partnerText = data.choices[0].message.content;
       const latency = Date.now() - startProcess;
 
@@ -192,131 +192,131 @@ export default function HCIExperimentPlatform() {
       setInteractionState('idle');
     }
   };
-  // --- 语音识别 (二进制协议修复版) ---
-// --- 语音识别 (二进制协议封装版 - 解决 UTF-8 报错) ---
+
+  // --- 语音识别 (二进制协议封装版 - 解决 UTF-8 报错) ---
   const handleMicClick = () => {
-      // ✅ 填入真实信息
-      const MY_APPID = "2167852377"; 
-      const MY_TOKEN = "ZtBt5W3f5JbujzshhrAjwVrC0aueKE8l";
-      const MY_CLUSTER = "volcengine_streaming_common"; // 通用版
+    // ✅ 填入真实信息
+    const MY_APPID = "2167852377";
+    const MY_TOKEN = "ZtBt5W3f5JbujzshhrAjwVrC0aueKE8l";
+    const MY_CLUSTER = "volcengine_streaming_common"; // 通用版
 
-      if (isRecording) {
-          // 停止录音
-          if(rec) {
-            rec.stop((blob: Blob, duration: number) => {
-                setIsRecording(false);
-                setInteractionState('process');
-                
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                    const audioData = new Uint8Array(reader.result as ArrayBuffer);
-                    const wsUrl = `wss://openspeech.bytedance.com/api/v2/asr`;
-                    const ws = new WebSocket(wsUrl);
-                    
-                    // 1. 设置接收二进制数据，防止 UTF-8 报错
-                    ws.binaryType = "arraybuffer";
+    if (isRecording) {
+      // 停止录音
+      if (rec) {
+        rec.stop((blob: Blob, duration: number) => {
+          setIsRecording(false);
+          setInteractionState('process');
 
-                    // 🛠️ 辅助函数：构建火山引擎需要的二进制包
-                    // 格式: [Header(4B)] [Size(4B)] [Payload]
-                    const buildMsg = (type: number, payload: Uint8Array) => {
-                        const header = new Uint8Array(4);
-                        header[0] = 0x11; // Version=1, HeaderSize=1
-                        header[1] = (type << 4); // MsgType (1=Full, 2=Audio)
-                        header[2] = 0x10; // Serial=JSON(1), Comp=None(0) -> 这一步很重要，不压缩！
-                        header[3] = 0x00; // Reserved
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const audioData = new Uint8Array(reader.result as ArrayBuffer);
+            const wsUrl = `wss://openspeech.bytedance.com/api/v2/asr`;
+            const ws = new WebSocket(wsUrl);
 
-                        const sizeBytes = new Uint8Array(4);
-                        new DataView(sizeBytes.buffer).setInt32(0, payload.length, false); // Big Endian
+            // 1. 设置接收二进制数据，防止 UTF-8 报错
+            ws.binaryType = "arraybuffer";
 
-                        const pkg = new Uint8Array(8 + payload.length);
-                        pkg.set(header, 0);
-                        pkg.set(sizeBytes, 4);
-                        pkg.set(payload, 8);
-                        return pkg;
-                    };
+            // 🛠️ 辅助函数：构建火山引擎需要的二进制包
+            // 格式: [Header(4B)] [Size(4B)] [Payload]
+            const buildMsg = (type: number, payload: Uint8Array) => {
+              const header = new Uint8Array(4);
+              header[0] = 0x11; // Version=1, HeaderSize=1
+              header[1] = (type << 4); // MsgType (1=Full, 2=Audio)
+              header[2] = 0x10; // Serial=JSON(1), Comp=None(0) -> 这一步很重要，不压缩！
+              header[3] = 0x00; // Reserved
 
-                    const textEncoder = new TextEncoder();
+              const sizeBytes = new Uint8Array(4);
+              new DataView(sizeBytes.buffer).setInt32(0, payload.length, false); // Big Endian
 
-                    ws.onopen = () => {
-                        console.log("WS Open. Sending Binary Protocol...");
-                        
-                        // --- 1. 发送 Start 指令 (Type=1 Full Client Request) ---
-                        const reqPayload = JSON.stringify({
-                            app: { appid: MY_APPID, token: MY_TOKEN, cluster: MY_CLUSTER },
-                            user: { uid: sessionId },
-                            request: {
-                                event: "Start", 
-                                reqid: uuidv4(), 
-                                workflow: "audio_in,resample,partition,vad,asr,itn,punctuation",
-                                audio: { format: "pcm", rate: 16000, bits: 16, channel: 1, codec: "raw" },
-                                // 必须指定 JSON 格式，且不压缩
-                                result: { encoding: "utf-8", format: "json" } 
-                            }
-                        });
-                        ws.send(buildMsg(1, textEncoder.encode(reqPayload)));
+              const pkg = new Uint8Array(8 + payload.length);
+              pkg.set(header, 0);
+              pkg.set(sizeBytes, 4);
+              pkg.set(payload, 8);
+              return pkg;
+            };
 
-                        // --- 2. 发送音频数据 (Type=2 Audio Only) ---
-                        // 为了简单，这里发整包（如果是长语音需要切片，但短语音整包发也没问题）
-                        ws.send(buildMsg(2, audioData));
-                        
-                        // --- 3. 发送 Stop 指令 (Type=1 Full Client Request) ---
-                        const stopPayload = JSON.stringify({
-                            app: { appid: MY_APPID, token: MY_TOKEN, cluster: MY_CLUSTER },
-                            request: { event: "Stop" }
-                        });
-                        ws.send(buildMsg(1, textEncoder.encode(stopPayload)));
-                    };
-                    
-                    ws.onmessage = (e) => {
-                        try {
-                            // 解析响应 (跳过前8字节的头，直接读 JSON)
-                            const respBytes = new Uint8Array(e.data as ArrayBuffer);
-                            // 校验一下是否是有效包
-                            if (respBytes.length > 8) {
-                                const payload = respBytes.slice(8);
-                                const decoder = new TextDecoder('utf-8');
-                                const jsonStr = decoder.decode(payload);
-                                // console.log("Parsed:", jsonStr);
-                                
-                                const data = JSON.parse(jsonStr);
-                                
-                                // 检查错误
-                                if (data.code !== 1000 && data.message) {
-                                    alert(`ASR Error: ${data.message}`);
-                                    ws.close();
-                                    return;
-                                }
+            const textEncoder = new TextEncoder();
 
-                                if (data.result && data.result.text) {
-                                    const text = data.result.text;
-                                    ws.close();
-                                    if(text.trim()) processMessageExchange(text);
-                                }
-                            }
-                        } catch (err) {
-                            console.error("Decode Error:", err);
-                        }
-                    };
-                    
-                    ws.onerror = (e) => {
-                        console.error("WS Error:", e);
-                        setInteractionState('idle');
-                    };
-                };
-                reader.readAsArrayBuffer(blob);
-            });
-          }
-      } else {
-          // 开始录音
-          const newRec = Recorder({ type: "pcm", bitRate: 16, sampleRate: 16000, bufferSize: 4096 });
-          newRec.open(() => {
-              newRec.start();
-              setRec(newRec);
-              setIsRecording(true);
-              setInteractionState('listen');
-          }, (msg:string) => alert("Mic Error: " + msg));
+            ws.onopen = () => {
+              console.log("WS Open. Sending Binary Protocol...");
+
+              // --- 1. 发送 Start 指令 (Type=1 Full Client Request) ---
+              const reqPayload = JSON.stringify({
+                app: { appid: MY_APPID, token: MY_TOKEN, cluster: MY_CLUSTER },
+                user: { uid: sessionId },
+                request: {
+                  event: "Start",
+                  reqid: uuidv4(),
+                  workflow: "audio_in,resample,partition,vad,asr,itn,punctuation",
+                  audio: { format: "pcm", rate: 16000, bits: 16, channel: 1, codec: "raw" },
+                  // 必须指定 JSON 格式，且不压缩
+                  result: { encoding: "utf-8", format: "json" }
+                }
+              });
+              ws.send(buildMsg(1, textEncoder.encode(reqPayload)));
+
+              // --- 2. 发送音频数据 (Type=2 Audio Only) ---
+              ws.send(buildMsg(2, audioData));
+
+              // --- 3. 发送 Stop 指令 (Type=1 Full Client Request) ---
+              const stopPayload = JSON.stringify({
+                app: { appid: MY_APPID, token: MY_TOKEN, cluster: MY_CLUSTER },
+                request: { event: "Stop" }
+              });
+              ws.send(buildMsg(1, textEncoder.encode(stopPayload)));
+            };
+
+            ws.onmessage = (e) => {
+              try {
+                // 解析响应 (跳过前8字节的头，直接读 JSON)
+                const respBytes = new Uint8Array(e.data as ArrayBuffer);
+                // 校验一下是否是有效包
+                if (respBytes.length > 8) {
+                  const payload = respBytes.slice(8);
+                  const decoder = new TextDecoder('utf-8');
+                  const jsonStr = decoder.decode(payload);
+                  // console.log("Parsed:", jsonStr);
+
+                  const data = JSON.parse(jsonStr);
+
+                  // 检查错误
+                  if (data.code !== 1000 && data.message) {
+                    alert(`ASR Error: ${data.message}`);
+                    ws.close();
+                    return;
+                  }
+
+                  if (data.result && data.result.text) {
+                    const text = data.result.text;
+                    ws.close();
+                    if (text.trim()) processMessageExchange(text);
+                  }
+                }
+              } catch (err) {
+                console.error("Decode Error:", err);
+              }
+            };
+
+            ws.onerror = (e) => {
+              console.error("WS Error:", e);
+              setInteractionState('idle');
+            };
+          };
+          reader.readAsArrayBuffer(blob);
+        });
       }
+    } else {
+      // 开始录音
+      const newRec = Recorder({ type: "pcm", bitRate: 16, sampleRate: 16000, bufferSize: 4096 });
+      newRec.open(() => {
+        newRec.start();
+        setRec(newRec);
+        setIsRecording(true);
+        setInteractionState('listen');
+      }, (msg: string) => alert("Mic Error: " + msg));
+    }
   };
+
   // --- 管理员视图 ---
   const AdminView = () => {
     const addNewModel = () => {
@@ -332,49 +332,49 @@ export default function HCIExperimentPlatform() {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-8 flex flex-col items-center overflow-y-auto">
         <div className="w-full max-w-4xl pb-12">
-            <header className="flex justify-between items-center mb-8 border-b border-gray-700 pb-4">
-                <h1 className="text-xl font-bold flex items-center gap-2"><Settings /> System Configuration</h1>
-                <button onClick={() => setCurrentView('login')} className="text-sm text-gray-400 hover:text-white">← Back</button>
-            </header>
-            
-            <div className="space-y-8">
-                {/* 1. 火山引擎语音配置 */}
-                <div className="bg-gray-800 p-6 rounded border border-orange-500/50">
-                    <h3 className="font-bold mb-4 text-orange-400 flex items-center gap-2"><AudioLines size={18}/> Volcengine Speech (ASR)</h3>
-                    <div className="grid md:grid-cols-2 gap-4">
-                        <div>
-                            <label className="text-xs text-gray-400 block mb-1">APP ID</label>
-                            <input value={volcAppId} onChange={e => setVolcAppId(e.target.value)} className="w-full bg-gray-700 p-2 rounded text-sm"/>
-                        </div>
-                        <div>
-                            <label className="text-xs text-gray-400 block mb-1">Access Token</label>
-                            <input value={volcToken} onChange={e => setVolcToken(e.target.value)} className="w-full bg-gray-700 p-2 rounded text-sm"/>
-                        </div>
-                    </div>
-                </div>
+          <header className="flex justify-between items-center mb-8 border-b border-gray-700 pb-4">
+            <h1 className="text-xl font-bold flex items-center gap-2"><Settings /> System Configuration</h1>
+            <button onClick={() => setCurrentView('login')} className="text-sm text-gray-400 hover:text-white">← Back</button>
+          </header>
 
-                {/* 2. LLM 模型配置 */}
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center">
-                    <h3 className="font-bold text-blue-400 flex items-center gap-2"><Activity size={18}/> LLM Models (AI Brain)</h3>
-                    <button onClick={addNewModel} className="flex items-center gap-1 bg-blue-600 px-3 py-1 rounded text-sm hover:bg-blue-500"><PlusCircle size={14}/> Add</button>
-                  </div>
-                  {modelList.map((model, index) => (
-                    <div key={model.id} className="bg-gray-800 p-6 rounded-lg border border-gray-700 relative">
-                      <button onClick={() => removeModel(model.id)} className="absolute top-4 right-4 text-gray-500 hover:text-red-500"><Trash2 size={18}/></button>
-                      <h4 className="text-xs text-gray-500 uppercase tracking-widest mb-3">Model #{index + 1}</h4>
-                      <div className="grid md:grid-cols-2 gap-4">
-                        <input value={model.alias} onChange={e => updateModel(model.id, 'alias', e.target.value)} placeholder="Alias" className="bg-gray-700 border-gray-600 rounded p-2 text-sm"/>
-                        <input value={model.modelName} onChange={e => updateModel(model.id, 'modelName', e.target.value)} placeholder="Model Name" className="bg-gray-700 border-gray-600 rounded p-2 text-sm"/>
-                        <input value={model.url} onChange={e => updateModel(model.id, 'url', e.target.value)} placeholder="Endpoint URL" className="md:col-span-2 bg-gray-700 border-gray-600 rounded p-2 text-sm"/>
-                        <input type="password" value={model.key} onChange={e => updateModel(model.id, 'key', e.target.value)} placeholder="API Key (sk-...)" className="md:col-span-2 bg-gray-700 border-gray-600 rounded p-2 text-sm border-2 border-blue-500/30"/>
-                      </div>
-                    </div>
-                  ))}
+          <div className="space-y-8">
+            {/* 1. 火山引擎语音配置 */}
+            <div className="bg-gray-800 p-6 rounded border border-orange-500/50">
+              <h3 className="font-bold mb-4 text-orange-400 flex items-center gap-2"><AudioLines size={18} /> Volcengine Speech (ASR)</h3>
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs text-gray-400 block mb-1">APP ID</label>
+                  <input value={volcAppId} onChange={e => setVolcAppId(e.target.value)} className="w-full bg-gray-700 p-2 rounded text-sm" />
                 </div>
-
-                <button onClick={() => setCurrentView('login')} className="w-full bg-green-600 py-3 rounded font-bold hover:bg-green-500">Save & Return</button>
+                <div>
+                  <label className="text-xs text-gray-400 block mb-1">Access Token</label>
+                  <input value={volcToken} onChange={e => setVolcToken(e.target.value)} className="w-full bg-gray-700 p-2 rounded text-sm" />
+                </div>
+              </div>
             </div>
+
+            {/* 2. LLM 模型配置 */}
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h3 className="font-bold text-blue-400 flex items-center gap-2"><Activity size={18} /> LLM Models (AI Brain)</h3>
+                <button onClick={addNewModel} className="flex items-center gap-1 bg-blue-600 px-3 py-1 rounded text-sm hover:bg-blue-500"><PlusCircle size={14} /> Add</button>
+              </div>
+              {modelList.map((model, index) => (
+                <div key={model.id} className="bg-gray-800 p-6 rounded-lg border border-gray-700 relative">
+                  <button onClick={() => removeModel(model.id)} className="absolute top-4 right-4 text-gray-500 hover:text-red-500"><Trash2 size={18} /></button>
+                  <h4 className="text-xs text-gray-500 uppercase tracking-widest mb-3">Model #{index + 1}</h4>
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <input value={model.alias} onChange={e => updateModel(model.id, 'alias', e.target.value)} placeholder="Alias" className="bg-gray-700 border-gray-600 rounded p-2 text-sm" />
+                    <input value={model.modelName} onChange={e => updateModel(model.id, 'modelName', e.target.value)} placeholder="Model Name" className="bg-gray-700 border-gray-600 rounded p-2 text-sm" />
+                    <input value={model.url} onChange={e => updateModel(model.id, 'url', e.target.value)} placeholder="Endpoint URL" className="md:col-span-2 bg-gray-700 border-gray-600 rounded p-2 text-sm" />
+                    <input type="password" value={model.key} onChange={e => updateModel(model.id, 'key', e.target.value)} placeholder="API Key (sk-...)" className="md:col-span-2 bg-gray-700 border-gray-600 rounded p-2 text-sm border-2 border-blue-500/30" />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button onClick={() => setCurrentView('login')} className="w-full bg-green-600 py-3 rounded font-bold hover:bg-green-500">Save & Return</button>
+          </div>
         </div>
       </div>
     );
@@ -386,16 +386,16 @@ export default function HCIExperimentPlatform() {
       <div className="bg-white p-8 rounded-xl shadow-xl w-full max-w-md">
         <h1 className="text-2xl font-bold mb-6 text-center">HCI Experiment</h1>
         <div className="mb-4">
-            <label className="block text-sm font-bold text-gray-700 mb-2">Participant ID</label>
-            <input type="text" value={participantName} onChange={(e) => setParticipantName(e.target.value)} className="w-full border-2 rounded-lg p-3" />
+          <label className="block text-sm font-bold text-gray-700 mb-2">Participant ID</label>
+          <input type="text" value={participantName} onChange={(e) => setParticipantName(e.target.value)} className="w-full border-2 rounded-lg p-3" />
         </div>
         <div className="mb-8 grid grid-cols-2 gap-4">
-            <button onClick={() => setSelectedInputMode('text')} className={`flex flex-col items-center p-4 rounded-lg border-2 ${selectedInputMode === 'text' ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}><Keyboard className="mb-2 text-blue-500"/><span className="text-sm font-bold">Text</span></button>
-            <button onClick={() => setSelectedInputMode('voice')} className={`flex flex-col items-center p-4 rounded-lg border-2 ${selectedInputMode === 'voice' ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}><AudioLines className="mb-2 text-blue-500"/><span className="text-sm font-bold">Voice (Volc)</span></button>
+          <button onClick={() => setSelectedInputMode('text')} className={`flex flex-col items-center p-4 rounded-lg border-2 ${selectedInputMode === 'text' ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}><Keyboard className="mb-2 text-blue-500" /><span className="text-sm font-bold">Text</span></button>
+          <button onClick={() => setSelectedInputMode('voice')} className={`flex flex-col items-center p-4 rounded-lg border-2 ${selectedInputMode === 'voice' ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}><AudioLines className="mb-2 text-blue-500" /><span className="text-sm font-bold">Voice (Volc)</span></button>
         </div>
-        <button onClick={handleLogin} className="w-full bg-black text-white py-4 rounded-lg font-bold flex justify-center gap-2">Start Experiment <Play size={20}/></button>
+        <button onClick={handleLogin} className="w-full bg-black text-white py-4 rounded-lg font-bold flex justify-center gap-2">Start Experiment <Play size={20} /></button>
       </div>
-      <button onClick={() => setCurrentView('admin')} className="fixed bottom-4 right-4 text-gray-300 p-2"><Settings size={16}/></button>
+      <button onClick={() => setCurrentView('admin')} className="fixed bottom-4 right-4 text-gray-300 p-2"><Settings size={16} /></button>
     </div>
   );
 
@@ -403,39 +403,39 @@ export default function HCIExperimentPlatform() {
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50 relative p-4">
       <div className="absolute top-4 right-4"><button onClick={() => setCurrentView('thank_you')} className="bg-white border px-4 py-2 rounded text-sm hover:text-red-600">End Session</button></div>
       <div className="absolute top-12 text-xs text-gray-400 uppercase tracking-widest animate-pulse">{interactionState === 'process' ? 'Thinking...' : interactionState === 'speak' ? 'Speaking...' : interactionState === 'listen' ? 'Recording...' : ''}</div>
-      
+
       {selectedInputMode === 'voice' && (
         <div className="w-full max-w-2xl h-64 mb-12 flex items-center justify-center">
-            <AudioVisualizer isActive={interactionState === 'listen' || interactionState === 'speak'} mode={interactionState === 'listen' ? 'user' : assignedCondition === 'AI_Model' ? 'ai' : 'human'} />
+          <AudioVisualizer isActive={interactionState === 'listen' || interactionState === 'speak'} mode={interactionState === 'listen' ? 'user' : assignedCondition === 'AI_Model' ? 'ai' : 'human'} />
         </div>
       )}
 
       <div className={`${selectedInputMode === 'text' ? 'h-96' : 'h-24'} w-full max-w-lg mb-6 overflow-y-auto bg-white rounded-xl p-4 shadow-sm border border-gray-100`}>
-         {logs.slice(selectedInputMode === 'voice' ? -2 : 0).map(msg => (
-           <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} mb-2`}>
-             <div className={`px-4 py-2 rounded-2xl text-sm max-w-[80%] ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800'}`}>{msg.content}</div>
-           </div>
-         ))}
+        {logs.slice(selectedInputMode === 'voice' ? -2 : 0).map(msg => (
+          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} mb-2`}>
+            <div className={`px-4 py-2 rounded-2xl text-sm max-w-[80%] ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800'}`}>{msg.content}</div>
+          </div>
+        ))}
       </div>
 
       <div className="w-full max-w-lg">
-          {selectedInputMode === 'voice' ? (
-              <div className="flex justify-center flex-col items-center gap-2">
-                <button
-                    onClick={handleMicClick}
-                    disabled={interactionState === 'process' || interactionState === 'speak'}
-                    className={`w-20 h-20 rounded-full flex items-center justify-center shadow-lg transition-all ${isRecording ? 'bg-red-500 scale-110' : 'bg-blue-600 text-white'}`}
-                >
-                    {isRecording ? <MicOff className="w-8 h-8" /> : <Mic className="w-8 h-8" />}
-                </button>
-                <p className="text-xs text-gray-400">{isRecording ? "Click to Stop & Send" : "Click to Record"}</p>
-              </div>
-          ) : (
-              <div className="flex gap-2">
-                <input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && processMessageExchange(inputText) && setInputText('')} placeholder="Type a message..." className="flex-1 border-2 rounded-xl px-4 py-3" />
-                <button onClick={() => { processMessageExchange(inputText); setInputText(''); }} className="bg-blue-600 text-white px-6 rounded-xl"><Send size={20} /></button>
-              </div>
-          )}
+        {selectedInputMode === 'voice' ? (
+          <div className="flex justify-center flex-col items-center gap-2">
+            <button
+              onClick={handleMicClick}
+              disabled={interactionState === 'process' || interactionState === 'speak'}
+              className={`w-20 h-20 rounded-full flex items-center justify-center shadow-lg transition-all ${isRecording ? 'bg-red-500 scale-110' : 'bg-blue-600 text-white'}`}
+            >
+              {isRecording ? <MicOff className="w-8 h-8" /> : <Mic className="w-8 h-8" />}
+            </button>
+            <p className="text-xs text-gray-400">{isRecording ? "Click to Stop & Send" : "Click to Record"}</p>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && processMessageExchange(inputText) && setInputText('')} placeholder="Type a message..." className="flex-1 border-2 rounded-xl px-4 py-3" />
+            <button onClick={() => { processMessageExchange(inputText); setInputText(''); }} className="bg-blue-600 text-white px-6 rounded-xl"><Send size={20} /></button>
+          </div>
+        )}
       </div>
     </div>
   );
