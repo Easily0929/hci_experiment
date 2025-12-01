@@ -348,4 +348,36 @@ export default function HCIExperimentPlatform() {
 
       <div className={`${selectedInputMode === 'text' ? 'h-96' : 'h-24'} w-full max-w-lg mb-6 overflow-y-auto bg-white rounded-xl p-4 shadow-sm border border-gray-100`}>
          {logs.slice(selectedInputMode === 'voice' ? -2 : 0).map(msg => (
-           <div key={msg.id} className={`flex ${msg.role ===
+           <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} mb-2`}>
+             <div className={`px-4 py-2 rounded-2xl text-sm max-w-[80%] ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800'}`}>{msg.content}</div>
+           </div>
+         ))}
+      </div>
+
+      <div className="w-full max-w-lg">
+          {selectedInputMode === 'voice' ? (
+              <div className="flex justify-center flex-col items-center gap-2">
+                <button
+                    onClick={handleMicClick}
+                    disabled={interactionState === 'process' || interactionState === 'speak'}
+                    className={`w-20 h-20 rounded-full flex items-center justify-center shadow-lg transition-all ${isRecording ? 'bg-red-500 scale-110' : 'bg-blue-600 text-white'}`}
+                >
+                    {isRecording ? <MicOff className="w-8 h-8" /> : <Mic className="w-8 h-8" />}
+                </button>
+                <p className="text-xs text-gray-400">{isRecording ? "Click to Stop & Send" : "Click to Record"}</p>
+              </div>
+          ) : (
+              <div className="flex gap-2">
+                <input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && processMessageExchange(inputText) && setInputText('')} placeholder="Type a message..." className="flex-1 border-2 rounded-xl px-4 py-3" />
+                <button onClick={() => { processMessageExchange(inputText); setInputText(''); }} className="bg-blue-600 text-white px-6 rounded-xl"><Send size={20} /></button>
+              </div>
+          )}
+      </div>
+    </div>
+  );
+
+  const ThankYouView = () => (<div className="min-h-screen bg-white flex flex-col items-center justify-center"><h1 className="text-3xl font-bold">Session Ended</h1><button onClick={() => setCurrentView('dashboard')} className="mt-4 underline">Data</button></div>);
+  const DashboardView = () => (<div className="p-8"><h1 className="text-2xl font-bold">Dashboard</h1><pre className="bg-gray-100 p-4 h-96 overflow-auto">{JSON.stringify(logs, null, 2)}</pre><button onClick={() => setCurrentView('login')} className="mt-4 bg-black text-white px-4 py-2 rounded">New Session</button></div>);
+
+  return <div className="font-sans text-gray-900">{currentView === 'login' && <LoginView />}{currentView === 'participant' && <ParticipantView />}{currentView === 'thank_you' && <ThankYouView />}{currentView === 'admin' && <AdminView />}{currentView === 'dashboard' && <DashboardView />}</div>;
+}
