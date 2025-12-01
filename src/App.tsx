@@ -192,108 +192,121 @@ export default function HCIExperimentPlatform() {
       setInteractionState('idle');
     }
   };
-// --- 语音识别 (切片发送修复版) ---
+  // --- 语音识别 (二进制协议修复版) ---
   const handleMicClick = () => {
-      // ⚠️ 再次确认：填入你的真实信息 (请确保没有空格)
+      // ⚠️ 填入你的真实信息
       const MY_APPID = "2167852377"; 
       const MY_TOKEN = "ZtBt5W3f5JbujzshhrAjwVrC0aueKE8l";
-      // 如果你确认开通了“流式语音识别-通用-中文”，请用 "volcengine_streaming_common"
-      // 如果你只开通了“大模型”，请用 "volcengine_input_common"
-      // 建议：先试 "volcengine_input_common" (对应你最早的截图)
+      // 大模型版请用 "volcengine_input_common"，普通版用 "volcengine_streaming_common"
       const MY_CLUSTER = "volcengine_input_common"; 
+      const MY_UID = "user_001";
 
       if (isRecording) {
-          // 停止录音并发送
+          // 停止录音
           if(rec) {
             rec.stop((blob: Blob, duration: number) => {
                 setIsRecording(false);
                 setInteractionState('process');
                 
+                // --- 核心修改：构建二进制协议 ---
                 const reader = new FileReader();
                 reader.onloadend = () => {
-                    const arrayBuffer = reader.result as ArrayBuffer;
+                    const audioData = new Uint8Array(reader.result as ArrayBuffer);
                     const wsUrl = `wss://openspeech.bytedance.com/api/v2/asr`;
                     const ws = new WebSocket(wsUrl);
-                    
-                    ws.binaryType = "arraybuffer"; // 允许接收二进制
-                    
+                    ws.binaryType = "arraybuffer";
+
+                    // 🛠️ 辅助函数：构建火山引擎需要的 4 字节 Header + Size + Payload
+                    // 协议格式：[Header(4B)][Size(4B)][Payload(N bytes)]
+                    // Header: Version(4bit) | HeaderSize(4bit) | MsgType(4bit) | Flags(4bit) | Serial(4bit) | Comp(4bit) | Reserved(8bit)
+                    const buildMsg = (type: number, payload: Uint8Array, isGzip = false) => {
+                        const header = new Uint8Array(4);
+                        // Byte 0: Version(0001) + HeaderSize(0001) = 0x11
+                        header[0] = 0x11; 
+                        // Byte 1: MsgType(full_client_request=1, audio=2) + Flags(0)
+                        header[1] = (type << 4) | 0x00; 
+                        // Byte 2: Serial(JSON=1) + Comp(Gzip=1, None=0)
+                        header[2] = (0x01 << 4) | (isGzip ? 0x01 : 0x00);
+                        // Byte 3: Reserved
+                        header[3] = 0x00;
+
+                        const sizeBytes = new Uint8Array(4);
+                        // Big Endian 写入 payload 长度
+                        new DataView(sizeBytes.buffer).setInt32(0, payload.length, false);
+
+                        const pkg = new Uint8Array(4 + 4 + payload.length);
+                        pkg.set(header, 0);
+                        pkg.set(sizeBytes, 4);
+                        pkg.set(payload, 8);
+                        return pkg;
+                    };
+
                     ws.onopen = () => {
-                        console.log("WS Open. Sending Start...");
+                        console.log("WS Open. Sending Full Client Request...");
                         
-                        // 1. 发送 Start 指令
-                        ws.send(JSON.stringify({
+                        // 1. 构建 JSON Payload
+                        const reqPayload = JSON.stringify({
                             app: { appid: MY_APPID, token: MY_TOKEN, cluster: MY_CLUSTER },
-                            user: { uid: sessionId },
+                            user: { uid: MY_UID },
                             request: {
                                 event: "Start", 
                                 reqid: uuidv4(), 
                                 workflow: "audio_in,resample,partition,vad,asr,itn,punctuation",
                                 audio: { format: "pcm", rate: 16000, bits: 16, channel: 1, codec: "raw" },
-                                // 🔴 关键修复：强制不压缩，防止乱码
-                                result: { encoding: "utf-8", format: "json", compress: "raw" }
+                                result: { encoding: "utf-8", format: "json" }
                             }
-                        }));
+                        });
+                        const textEncoder = new TextEncoder();
+                        // 发送 Full Client Request (Type=1)
+                        ws.send(buildMsg(1, textEncoder.encode(reqPayload)));
+
+                        // 2. 发送 Audio Only Request (Type=2)
+                        // 注意：真实流式应该切片，这里为了演示发整包，且假设音频不大
+                        // 如果音频很大，必须切片，且最后一包 Flags 要置为 0x02
+                        // 这里简化处理：构造一个音频包
+                        const audioHeader = new Uint8Array(4);
+                        audioHeader[0] = 0x11;
+                        audioHeader[1] = (0x02 << 4) | 0x02; // Type=2, Flags=2 (最后一包)
+                        audioHeader[2] = (0x00 << 4) | 0x00; // No serialization, No compression
+                        audioHeader[3] = 0x00;
                         
-                        // 2. 切片发送音频 (防止包太大报错)
-                        const chunkSize = 4096; // 每次发 4KB
-                        let offset = 0;
-                        const uint8Data = new Uint8Array(arrayBuffer);
+                        const audioSize = new Uint8Array(4);
+                        new DataView(audioSize.buffer).setInt32(0, audioData.length, false);
                         
-                        const sendLoop = setInterval(() => {
-                            if (offset >= uint8Data.length) {
-                                clearInterval(sendLoop);
-                                // 发送完毕后，发送 Stop
-                                ws.send(JSON.stringify({
-                                    app: { appid: MY_APPID, token: MY_TOKEN, cluster: MY_CLUSTER },
-                                    request: { event: "Stop" }
-                                }));
-                                console.log("Audio sent done.");
-                                return;
-                            }
-                            
-                            const end = Math.min(offset + chunkSize, uint8Data.length);
-                            const chunk = uint8Data.slice(offset, end);
-                            ws.send(chunk);
-                            offset += chunkSize;
-                        }, 10); // 每 10ms 发送一包
+                        const audioPkg = new Uint8Array(8 + audioData.length);
+                        audioPkg.set(audioHeader, 0);
+                        audioPkg.set(audioSize, 4);
+                        audioPkg.set(audioData, 8);
+                        
+                        ws.send(audioPkg);
                     };
                     
                     ws.onmessage = (e) => {
-                        // 尝试解析
+                        // 解析响应：也是 Header + Size + Payload
+                        // 简化处理：直接跳过前 8 字节读 Payload (假设是 JSON)
                         try {
-                            let jsonString = e.data;
-                            if (typeof e.data !== 'string') {
+                            const respData = new Uint8Array(e.data as ArrayBuffer);
+                            // 校验 Header (0x19 0x00 0x00 0x00 通常是 Response)
+                            if (respData.length > 8) {
+                                const payload = respData.slice(8);
                                 const decoder = new TextDecoder('utf-8');
-                                jsonString = decoder.decode(e.data);
-                            }
-                            
-                            const data = JSON.parse(jsonString);
-                            console.log("ASR Recv:", data);
-
-                            if (data.code !== 1000 && data.message) {
-                                console.error("ASR Server Error:", data);
-                                // 如果是最后一包报错，才弹窗，防止中间状态干扰
-                                if(data.code !== 1000) alert(`ASR Error: ${data.message}`);
-                                ws.close();
-                                return;
-                            }
-
-                            if (data.result && data.result.text) {
-                                 const text = data.result.text;
-                                 // 只有拿到有效文本才更新
-                                 if(text.trim()) {
-                                     ws.close();
-                                     processMessageExchange(text);
-                                 }
+                                const jsonStr = decoder.decode(payload);
+                                // console.log("Raw Resp:", jsonStr);
+                                
+                                const data = JSON.parse(jsonStr);
+                                if (data.result && data.result.text) {
+                                    ws.close();
+                                    processMessageExchange(data.result.text);
+                                }
                             }
                         } catch (err) {
-                            console.warn("Non-JSON message:", e.data);
+                            console.error("Parse Error:", err);
                         }
                     };
                     
                     ws.onerror = (e) => {
                         console.error("WS Error:", e);
-                        // 静默失败，等待 onmessage 里的详细报错
+                        alert("连接失败，请检查 Cluster 是否匹配");
                         setInteractionState('idle');
                     };
                 };
