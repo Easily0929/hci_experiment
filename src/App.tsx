@@ -192,8 +192,7 @@ export default function HCIExperimentPlatform() {
       setInteractionState('idle');
     }
   };
-
-  // --- 语音识别 (适配大模型版) ---
+  // --- 语音识别 (适配普通版通用集群) ---
   const handleMicClick = () => {
       if (isRecording) {
           // 停止录音并发送
@@ -209,22 +208,29 @@ export default function HCIExperimentPlatform() {
                     const ws = new WebSocket(wsUrl);
                     
                     ws.onopen = () => {
-                        console.log("Connect to Volcengine (Input Common)...");
+                        console.log("正在连接火山引擎 (普通版)...");
                         
                         // 1. 发送 Start 指令
+                        // 🔴 改回了普通版集群
                         ws.send(JSON.stringify({
                             app: { 
                                 appid: volcAppId, 
                                 token: volcToken, 
-                                cluster: "volcengine_input_common" // 大模型专用集群
+                                cluster: "volcengine_streaming_common" 
                             },
                             user: { uid: sessionId },
                             request: {
                                 event: "Start", 
                                 reqid: uuidv4(), 
                                 workflow: "audio_in,resample,partition,vad,asr,itn,punctuation",
-                                audio: { format: "pcm", rate: 16000, bits: 16, channel: 1, codec: "raw" },
-                                result: { encoding: "utf-8", format: "json" }
+                                audio: { 
+                                    format: "pcm", 
+                                    rate: 16000, 
+                                    bits: 16, 
+                                    channel: 1, 
+                                    codec: "raw" 
+                                }
+                                // 🔴 注意：普通版去掉了 result 字段，防止协议冲突
                             }
                         }));
                         
@@ -236,7 +242,7 @@ export default function HCIExperimentPlatform() {
                             app: { 
                                 appid: volcAppId, 
                                 token: volcToken, 
-                                cluster: "volcengine_input_common" // 必须一致
+                                cluster: "volcengine_streaming_common" 
                             },
                             request: { event: "Stop" }
                         }));
@@ -244,12 +250,16 @@ export default function HCIExperimentPlatform() {
                     
                     ws.onmessage = (e) => {
                         const data = JSON.parse(e.data);
-                        // 如果有错误信息
+                        // 调试日志
+                        console.log("ASR:", data);
+                        
+                        // 错误捕获
                         if (data.code !== 1000 && data.message) {
                             alert(`ASR Error [${data.code}]: ${data.message}`);
                             ws.close();
                             return;
                         }
+
                         if (data.result && data.result.text) {
                              const text = data.result.text;
                              ws.close();
@@ -260,7 +270,7 @@ export default function HCIExperimentPlatform() {
                     
                     ws.onerror = (e) => {
                         console.error("WS Error:", e);
-                        alert("连接失败。请检查 Admin 中的 AppID/Token 以及控制台服务是否开通。");
+                        alert("连接断开。请检查控制台 Network -> WS -> Messages 里的 Status Code");
                         setInteractionState('idle');
                     };
                 };
@@ -269,17 +279,16 @@ export default function HCIExperimentPlatform() {
           }
       } else {
           // 开始录音
-          if (!volcAppId || !volcToken) { alert("Please configure Volcengine in Admin"); return; }
+          if (!volcAppId || !volcToken) { alert("Admin配置缺失"); return; }
           const newRec = Recorder({ type: "pcm", bitRate: 16, sampleRate: 16000, bufferSize: 4096 });
           newRec.open(() => {
               newRec.start();
               setRec(newRec);
               setIsRecording(true);
               setInteractionState('listen');
-          }, (msg:string) => alert("麦克风启动失败: " + msg));
+          }, (msg:string) => alert("麦克风失败: " + msg));
       }
   };
-
   // --- 管理员视图 ---
   const AdminView = () => {
     const addNewModel = () => {
