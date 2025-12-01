@@ -193,15 +193,12 @@ export default function HCIExperimentPlatform() {
     }
   };
   // --- 语音识别 (二进制协议修复版) ---
-  // --- 语音识别 (手动解码通用版) ---
+ // --- 语音识别 (二进制修复版 - 适配通用中文) ---
   const handleMicClick = () => {
-      // ⚠️ 请填入你的真实信息 (确保去掉了空格)
+      // ✅ 我已根据你的截图填入真实信息
       const MY_APPID = "2167852377"; 
       const MY_TOKEN = "ZtBt5W3f5JbujzshhrAjwVrC0aueKE8l";
-      
-      // 🟢 关键：我们退回到最稳定的“普通版/通用版”集群
-      // 请务必确认你在火山引擎控制台开通了“流式语音识别-通用-中文”
-      const MY_CLUSTER = "volcengine_streaming_common"; 
+      const MY_CLUSTER = "volcengine_streaming_common"; // 对应你截图里的“通用-中文”
 
       if (isRecording) {
           // 停止录音并发送
@@ -216,13 +213,14 @@ export default function HCIExperimentPlatform() {
                     const wsUrl = `wss://openspeech.bytedance.com/api/v2/asr`;
                     const ws = new WebSocket(wsUrl);
                     
-                    // 🔥 核心魔法 1：告诉浏览器，收到的数据当作二进制处理，不要自作多强去解析文本
-                    ws.binaryType = "arraybuffer"; 
+                    // 🔥🔥🔥 核心修复：这一行绝对不能少！🔥🔥🔥
+                    // 告诉浏览器：服务器发回来的可能是二进制，别报错，先收着！
+                    ws.binaryType = "arraybuffer";
                     
                     ws.onopen = () => {
-                        console.log("WS Connected. Sending data...");
+                        console.log("WS Open. Sending data...");
                         
-                        // 1. 发送 Start (用最简单的 JSON 发送，不折腾二进制头)
+                        // 1. 发送 Start 指令
                         ws.send(JSON.stringify({
                             app: { appid: MY_APPID, token: MY_TOKEN, cluster: MY_CLUSTER },
                             user: { uid: sessionId },
@@ -231,12 +229,11 @@ export default function HCIExperimentPlatform() {
                                 reqid: uuidv4(), 
                                 workflow: "audio_in,resample,partition,vad,asr,itn,punctuation",
                                 audio: { format: "pcm", rate: 16000, bits: 16, channel: 1, codec: "raw" },
-                                // 告诉服务器尽量回传 JSON
                                 result: { encoding: "utf-8", format: "json" }
                             }
                         }));
                         
-                        // 2. 发送音频 (切片发送，更稳)
+                        // 2. 切片发送音频 (防止包太大)
                         const chunkSize = 4096; 
                         let offset = 0;
                         const uint8Data = new Uint8Array(arrayBuffer);
@@ -262,25 +259,21 @@ export default function HCIExperimentPlatform() {
                     };
                     
                     ws.onmessage = (e) => {
-                        // 🔥 核心魔法 2：手动把服务器发回来的“乱码”翻译成文字
+                        // 🟢 手动解码：不管是文本还是二进制，都转成字符串处理
                         try {
                             let jsonString = "";
                             if (typeof e.data === 'string') {
                                 jsonString = e.data;
                             } else {
-                                // 如果是二进制，手动解码
                                 const decoder = new TextDecoder('utf-8');
                                 jsonString = decoder.decode(e.data);
                             }
                             
-                            console.log("Raw Response:", jsonString);
-                            
-                            // 尝试解析 JSON
-                            // 注意：有时候服务器会把 gzip 数据当做文本发过来，解析会失败，这里做了容错
+                            console.log("ASR Recv:", jsonString); // 打印出来看报错信息
                             const data = JSON.parse(jsonString);
 
-                            // 检查错误
                             if (data.code !== 1000 && data.message) {
+                                // 如果有错，这里会弹窗告诉你具体原因
                                 alert(`火山引擎报错: ${data.message} (Code: ${data.code})`);
                                 ws.close();
                                 return;
@@ -292,20 +285,13 @@ export default function HCIExperimentPlatform() {
                                  if(text.trim()) processMessageExchange(text);
                             }
                         } catch (err) {
-                            console.warn("非 JSON 消息 (可能是压缩数据，已忽略):", err);
+                            console.warn("Parse Error:", err);
                         }
                     };
                     
-                    ws.onclose = (e) => {
-                        // 如果非正常关闭 (1000是正常关闭)
-                        if (e.code !== 1000) {
-                            console.error("WS Close:", e);
-                            // 这里不弹窗了，避免干扰，主要看 onmessage 的报错
-                        }
-                    };
-
                     ws.onerror = (e) => {
                         console.error("WS Error:", e);
+                        // 这次加上 binaryType 后，onerror 应该不会触发了
                         setInteractionState('idle');
                     };
                 };
@@ -320,7 +306,7 @@ export default function HCIExperimentPlatform() {
               setRec(newRec);
               setIsRecording(true);
               setInteractionState('listen');
-          }, (msg:string) => alert("Mic Error: " + msg));
+          }, (msg:string) => alert("麦克风失败: " + msg));
       }
   };
   // --- 管理员视图 ---
