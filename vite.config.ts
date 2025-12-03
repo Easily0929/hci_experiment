@@ -4,4 +4,32 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // 生产环境构建配置
+  build: {
+    outDir: 'dist',
+    assetsDir: 'assets',
+    sourcemap: false,
+    // 启用压缩
+    minify: 'terser',
+    // 分块策略
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom'],
+          'chart-vendor': ['recharts'],
+          'ui-vendor': ['lucide-react'],
+        },
+      },
+    },
+  },
+  // 开发服务器配置
+  server: {
+    port: 5173,
+    open: true,
+  },
+  // 预览服务器配置
+  preview: {
+    port: 4173,
+    open: true,
+  },
 })

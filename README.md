@@ -2,303 +2,211 @@
 
 一个基于 React + TypeScript + Vite 构建的人机交互（HCI）实验平台，支持语音和文本两种交互模式，用于研究用户与AI助手或人类伙伴的交互体验。
 
-## 📁 项目文件结构
+## ✨ 核心功能
 
-```
-hci_experiment-main 2/
-├── index.html              # HTML 入口文件
-├── package.json            # 项目依赖和脚本配置
-├── vite.config.ts          # Vite 构建工具配置
-├── react-ts-xaifrsnf.zip  # 项目压缩包（可删除）
-├── src/
-│   ├── App.tsx             # 主应用组件（包含所有功能逻辑）
-│   ├── index.tsx           # React 应用入口文件
-│   └── style.css           # 全局样式文件
-└── README.md               # 项目说明文档（本文件）
-```
+- ✅ **双模式交互**: 文本输入和语音识别
+- ✅ **腾讯云语音识别**: 无需 VPN，新用户免费 5 小时
+- ✅ **阿里云 DashScope TTS**: 高质量语音合成
+- ✅ **实时数据存储**: 自动保存到 Supabase
+- ✅ **完整行为记录**: 记录所有用户交互数据
 
 ## 🚀 快速开始
 
 ### 环境要求
 
-- Node.js 16+ 
+- Node.js 16+
 - npm 或 yarn
-- Edge 浏览器 79+ 或 Chrome 浏览器（推荐使用 Edge 以获得最佳语音识别体验）
+- Edge 浏览器 79+ 或 Chrome 浏览器（推荐 Edge）
 
-### 安装步骤
+### 安装和运行
 
-1. **安装依赖**
-   ```bash
-   npm install
-   ```
+```bash
+# 安装依赖
+npm install
 
-2. **配置 Supabase（可选）**
-   - 项目已配置 Supabase 用于数据存储
-   - 如需修改，请编辑 `src/App.tsx` 中的 `SUPABASE_URL` 和 `SUPABASE_ANON_KEY`
+# 启动开发服务器
+npm run dev
 
-3. **配置 AI API Key**
-   - 在登录页面点击右下角设置按钮进入管理员界面
-   - 为每个语音模型配置 API Key（使用 SiliconFlow API）
-   - 默认模型使用 `deepseek-ai/DeepSeek-V2.5`
+# 构建生产版本
+npm run build
 
-4. **启动开发服务器**
-   ```bash
-   npm run dev
-   ```
-
-5. **构建生产版本**
-   ```bash
-   npm run build
-   ```
-
-6. **预览生产构建**
-   ```bash
-   npm run preview
-   ```
-
-## 📄 文件说明
-
-### `index.html`
-- HTML 入口文件
-- 引入 Tailwind CSS（通过 CDN）
-- 包含 React 应用的挂载点 `<div id="root"></div>`
-- 加载主入口脚本 `/src/index.tsx`
-
-### `package.json`
-项目依赖和脚本配置：
-
-**主要依赖：**
-- `react` & `react-dom`: React 框架
-- `@supabase/supabase-js`: Supabase 客户端
-- `recharts`: 数据可视化图表库
-- `lucide-react`: 图标库
-- `uuid`: 生成唯一ID
-- `recorder-core`: 音频录制核心库
-
-**开发依赖：**
-- `vite`: 构建工具
-- `@vitejs/plugin-react`: React 插件
-- `typescript`: TypeScript 支持
-- `tailwindcss`: CSS 框架
-
-**可用脚本：**
-- `npm run dev`: 启动开发服务器
-- `npm run build`: 构建生产版本
-- `npm run preview`: 预览生产构建
-
-### `vite.config.ts`
-Vite 配置文件：
-- 使用 `@vitejs/plugin-react` 插件支持 React
-- 配置了 TypeScript 支持
-
-### `src/index.tsx`
-React 应用入口：
-- 渲染 `App` 组件到 DOM
-- 使用 React 18 的 `createRoot` API
-
-### `src/App.tsx`
-**核心应用文件**，包含所有功能：
-
-#### 主要功能模块：
-
-1. **用户认证与登录**
-   - 参与者姓名输入
-   - 交互模式选择（文本/语音）
-   - 自动分配实验条件（AI_Model / Human_Partner）
-
-2. **语音交互功能**
-   - 浏览器原生语音识别（Web Speech API）
-   - 语音合成（Text-to-Speech）
-   - Edge 浏览器优化支持
-   - 实时转录显示
-   - 音频可视化
-
-3. **文本交互功能**
-   - 文本输入框
-   - 消息发送
-   - 对话历史记录
-
-4. **AI 模型集成**
-   - 支持多个语音模型配置
-   - SiliconFlow API 集成
-   - 可自定义系统提示词
-   - 响应延迟统计
-
-5. **数据管理**
-   - Supabase 数据存储
-   - 本地会话管理
-   - 实验日志记录
-
-6. **管理员界面**
-   - 语音模型配置
-   - API Key 管理
-   - Edge 浏览器诊断工具
-   - 语音识别配置说明
-
-7. **数据仪表板**
-   - 消息统计
-   - 响应延迟图表
-   - 原始数据查看
-
-#### 主要组件：
-
-- `HCIExperimentPlatform`: 主应用组件
-- `LoginView`: 登录界面
-- `ParticipantView`: 参与者交互界面
-- `AdminView`: 管理员配置界面
-- `ThankYouView`: 实验结束感谢页面
-- `DashboardView`: 数据仪表板
-- `ChatMessage`: 聊天消息组件
-- `PersistentTextInput`: 持久化文本输入组件
-- `AudioVisualizer`: 音频可视化组件
-- `EdgeDiagnostic`: Edge 浏览器诊断工具
-
-### `src/style.css`
-全局样式文件：
-- 定义基础字体样式（Lato）
-
-## 🎯 核心功能
-
-### 1. 双模式交互
-- **文本模式**: 键盘输入，适合快速输入
-- **语音模式**: 语音识别，支持自然对话
-
-### 2. 实验条件分配
-- **AI_Model**: 与 AI 助手交互
-- **Human_Partner**: 与人类伙伴交互（实际为配置的 AI 模型）
-
-### 3. 语音识别特性
-- 支持中文语音识别
-- Edge/Chrome 浏览器优化
-- 实时转录显示
-- 错误处理和重试机制
-- 麦克风权限管理
-
-### 4. 数据收集
-- 所有交互消息自动保存到 Supabase
-- 记录响应延迟
-- 记录交互模式
-- 记录实验条件
-
-### 5. 可视化分析
-- 响应延迟趋势图
-- 消息统计
-- 模式使用统计
-
-## 🔧 配置说明
-
-### Supabase 配置
-在 `src/App.tsx` 中修改：
-```typescript
-const SUPABASE_URL = 'your-supabase-url';
-const SUPABASE_ANON_KEY = 'your-anon-key';
+# 预览生产构建
+npm run preview
 ```
 
+访问 `http://localhost:5173`
+
+## 🗄️ 数据库配置
+
+### Supabase 数据库信息
+
+**Dashboard**: https://app.supabase.com/project/pqhrtviidwuwspubaxfm
+
+**项目 URL**: `https://pqhrtviidwuwspubaxfm.supabase.co`
+
+**Anon Key**: `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxaHJ0dmlpZHd1d3NwdWJheGZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjQ1NTQwNzEsImV4cCI6MjA4MDEzMDA3MX0.2UXvn6wk9Qlhq_HnRKm5bqIrFKwwPTuBq0kyXxa-WDI`
+
+### 数据库表设置
+
+1. 访问 [Supabase Dashboard](https://app.supabase.com/project/pqhrtviidwuwspubaxfm)
+2. 点击 **SQL Editor**
+3. 执行 `database-setup.sql` 中的 SQL 创建表
+
+**注意**: 代码中已包含默认 Supabase 配置，无需修改即可使用。如需使用自己的 Supabase 项目，可修改 `src/App.tsx` 中的配置或创建 `.env` 文件。
+
+## 📊 数据访问
+
+### 方式一：Supabase Dashboard（推荐）
+
+1. 访问 https://app.supabase.com/project/pqhrtviidwuwspubaxfm
+2. 点击 **Table Editor**
+3. 选择 `experiment_logs` 表查看数据
+
+### 方式二：SQL 查询
+
+在 Supabase Dashboard 的 **SQL Editor** 中执行：
+
+```sql
+-- 查看最近 100 条记录
+SELECT * FROM experiment_logs 
+ORDER BY timestamp DESC 
+LIMIT 100;
+
+-- 按会话统计
+SELECT 
+  session_id,
+  participant_name,
+  COUNT(*) as message_count,
+  AVG(latency) as avg_latency
+FROM experiment_logs
+GROUP BY session_id, participant_name
+ORDER BY MAX(timestamp) DESC;
+
+-- 按实验条件统计
+SELECT 
+  condition,
+  COUNT(*) as total_messages,
+  COUNT(DISTINCT session_id) as session_count,
+  COUNT(DISTINCT participant_name) as participant_count
+FROM experiment_logs
+GROUP BY condition;
+```
+
+### 方式三：REST API
+
+```bash
+curl 'https://pqhrtviidwuwspubaxfm.supabase.co/rest/v1/experiment_logs?limit=10' \
+  -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxaHJ0dmlpZHd1d3NwdWJheGZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjQ1NTQwNzEsImV4cCI6MjA4MDEzMDA3MX0.2UXvn6wk9Qlhq_HnRKm5bqIrFKwwPTuBq0kyXxa-WDI" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxaHJ0dmlpZHd1d3NwdWJheGZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjQ1NTQwNzEsImV4cCI6MjA4MDEzMDA3MX0.2UXvn6wk9Qlhq_HnRKm5bqIrFKwwPTuBq0kyXxa-WDI"
+```
+
+## 🚀 部署到 Vercel
+
+### 方式一：通过 GitHub（推荐）
+
+1. 推送代码到 GitHub
+2. 在 [Vercel](https://vercel.com) 中导入项目
+3. 点击 **Deploy**（项目已包含 `vercel.json`，无需额外配置）
+
+### 方式二：使用 Vercel CLI
+
+```bash
+npm i -g vercel
+vercel login
+vercel --prod
+```
+
+## ⚙️ 配置说明
+
 ### AI API 配置
-在管理员界面中配置：
-- API URL: SiliconFlow API 地址
-- API Key: 你的 API 密钥
-- 模型名称: 使用的模型（如 `deepseek-ai/DeepSeek-V2.5`）
-- 系统提示词: 定义 AI 的行为和风格
 
-### 语音模型配置
-支持配置多个语音模型：
-- 模型别名
-- 语音合成参数（语速、音调）
-- 文本 LLM 配置
+1. 打开应用，点击右下角设置按钮
+2. 在管理员界面配置语音模型的 API Key
+3. 支持阿里云 DashScope API
 
-## 🌐 浏览器兼容性
+### 腾讯云语音识别配置（推荐）
 
-### 推荐浏览器
-- **Microsoft Edge 79+**（最佳体验）
-- **Google Chrome**（良好支持）
+**优势**: 无需 VPN，新用户免费 5 小时，超出后约 3 元/小时
 
-### 语音识别要求
-- 需要 HTTPS 连接（本地开发可使用 localhost）
-- 需要麦克风权限
-- 需要浏览器支持 Web Speech API
+1. 在管理员界面选择"识别类型"为"腾讯云"
+2. 访问 [腾讯云控制台](https://console.cloud.tencent.com/cam/capi) 获取 SecretId 和 SecretKey
+3. 开通 [实时语音识别服务](https://console.cloud.tencent.com/asr)（免费试用）
+4. 填写识别服务 URL、SecretId 和识别模型（如：16k_zh）
 
-### Edge 浏览器特殊说明
-- 首次使用需要允许麦克风权限
-- 点击地址栏左侧的麦克风图标进行权限管理
-- 建议在安静环境下使用
-- 支持诊断工具检查兼容性
+## 📁 项目结构
 
-## 📊 数据存储
+```
+hci_experiment-main 2/
+├── src/
+│   ├── App.tsx              # 主应用（包含所有功能）
+│   ├── index.tsx            # React 入口
+│   └── style.css           # 全局样式
+├── index.html               # HTML 入口
+├── package.json             # 依赖配置
+├── vite.config.ts           # Vite 配置
+├── vercel.json              # Vercel 部署配置
+├── database-setup.sql       # 数据库表结构 SQL
+└── README.md                # 本文件
+```
 
-### Supabase 表结构
+## 📊 数据表结构
+
 数据存储在 `experiment_logs` 表中，包含以下字段：
+
+- `id`: 主键（自增）
 - `session_id`: 会话ID
 - `participant_name`: 参与者姓名
 - `user_id`: 用户ID
 - `voice_model_id`: 语音模型ID
-- `condition`: 实验条件
-- `role`: 消息角色（user/partner/system/assistant）
+- `condition`: 实验条件（AI_Model/Human_Partner）
+- `role`: 角色（user/partner/system/assistant）
 - `content`: 消息内容
 - `latency`: 响应延迟（毫秒）
 - `timestamp`: 时间戳
+- `input_mode`: 输入模式（text/voice）
+- `actual_model_used`: 实际使用的模型
 
-## 🛠️ 开发指南
+## 🌐 浏览器兼容性
 
-### 添加新的语音模型
-1. 进入管理员界面
-2. 点击"添加模型"按钮
-3. 配置模型参数
-4. 保存配置
+### 推荐浏览器
 
-### 自定义样式
-项目使用 Tailwind CSS，可以通过以下方式自定义：
-- 修改组件中的 className
-- 在 `src/style.css` 中添加全局样式
-- 配置 Tailwind 主题（需要创建 `tailwind.config.js`）
+- **Microsoft Edge 79+**（最佳体验）
+- **Google Chrome**（良好支持）
 
-### 扩展功能
-- 添加新的交互模式
-- 集成其他 AI 服务
-- 添加更多数据分析功能
-- 实现数据导出功能
+### 语音识别要求
 
-## ⚠️ 注意事项
+- HTTPS 连接（本地开发可使用 localhost）
+- 麦克风权限
+- 浏览器支持 Web Speech API
 
-1. **API Key 安全**: 不要将 API Key 提交到公共仓库
-2. **麦克风权限**: 确保用户已授权麦克风访问
-3. **网络连接**: AI API 调用需要稳定的网络连接
-4. **数据隐私**: 确保遵守数据保护法规
-5. **浏览器版本**: 使用最新版本的 Edge 或 Chrome
+**注意**: 浏览器原生语音识别可能需要 VPN。推荐使用腾讯云语音识别（无需 VPN）。
 
-## 🐛 常见问题
+## 🔧 常见问题
 
 ### 语音识别不工作
-1. 检查浏览器是否支持 Web Speech API
+
+1. 检查浏览器是否支持（Edge/Chrome）
 2. 确认已授予麦克风权限
 3. 尝试刷新页面
 4. 检查是否有其他程序占用麦克风
-5. 使用 Edge 浏览器诊断工具
+5. **推荐**: 配置腾讯云语音识别（无需 VPN）
+
+### 数据无法保存
+
+1. 检查 Supabase 配置是否正确
+2. 确认数据库表已创建（执行 `database-setup.sql`）
+3. 检查网络连接
 
 ### AI 响应失败
+
 1. 检查 API Key 是否正确配置
 2. 确认网络连接正常
 3. 检查 API 配额是否充足
-4. 查看浏览器控制台错误信息
-
-### 数据未保存
-1. 检查 Supabase 配置是否正确
-2. 确认网络连接正常
-3. 检查 Supabase 表结构是否正确
 
 ## 📝 许可证
 
 本项目为实验研究用途，请根据实际需求选择合适的许可证。
 
-## 👥 贡献
-
-欢迎提交 Issue 和 Pull Request 来改进这个项目。
-
-## 📧 联系方式
-
-如有问题或建议，请通过 Issue 反馈。
-
 ---
 
 **最后更新**: 2024年
-
