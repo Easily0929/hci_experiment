@@ -1406,12 +1406,14 @@ const HCIExperimentPlatform = () => {
     } catch (e) {
       console.warn('读取语音模型配置失败，使用默认值:', e);
     }
-    // 默认配置
+    // 默认配置（已配置腾讯云识别）
     return [
       {
         id: 'model_1',
         alias: 'AI助手 - Qwen-TTS-Realtime (Cherry)',
-        recognitionType: 'browser',
+        recognitionType: 'custom',
+        recognitionUrl: 'wss://asr.cloud.tencent.com/asr/v2/1342201105',
+        recognitionKey: 'AKIDPsAJ3e5KMDvYyPvNvz8DB7uVv87uVs1w',
         synthesisType: 'custom',
         synthesisUrl: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/realtime',
         synthesisKey: 'sk-c5e6833061944016adc237cc5bc92da8',
@@ -1426,7 +1428,9 @@ const HCIExperimentPlatform = () => {
       {
         id: 'model_2',
         alias: 'AI助手 - Qwen-TTS-Realtime (Ethan)',
-        recognitionType: 'browser',
+        recognitionType: 'custom',
+        recognitionUrl: 'wss://asr.cloud.tencent.com/asr/v2/1342201105',
+        recognitionKey: 'AKIDPsAJ3e5KMDvYyPvNvz8DB7uVv87uVs1w',
         synthesisType: 'custom',
         synthesisUrl: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/realtime',
         synthesisKey: 'sk-c5e6833061944016adc237cc5bc92da8',
@@ -1441,7 +1445,9 @@ const HCIExperimentPlatform = () => {
       {
         id: 'model_3',
         alias: '人类伙伴 - Qwen-TTS-Realtime (Serena)',
-        recognitionType: 'browser',
+        recognitionType: 'custom',
+        recognitionUrl: 'wss://asr.cloud.tencent.com/asr/v2/1342201105',
+        recognitionKey: 'AKIDPsAJ3e5KMDvYyPvNvz8DB7uVv87uVs1w',
         synthesisType: 'custom',
         synthesisUrl: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/realtime',
         synthesisKey: 'sk-c5e6833061944016adc237cc5bc92da8',
