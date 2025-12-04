@@ -68,17 +68,22 @@ export default async function handler(
       });
     }
 
+    // 生成时间戳和随机数（如果未提供）
+    const timestamp = params.timestamp || Math.floor(Date.now() / 1000);
+    const nonce = params.nonce || Math.floor(Math.random() * 1000000);
+    const expired = timestamp + 300; // 5分钟后过期
+
     // 构建参数字典（按字典序排序）
     const sortedParams: Record<string, string> = {
       engine_model_type: params.engine_model_type || '16k_zh',
-      expired: ((params.timestamp || Math.floor(Date.now() / 1000)) + 300).toString(), // 5分钟后过期
+      expired: expired.toString(),
       filter_dirty: params.filter_dirty || '0',
       filter_modal: params.filter_modal || '0',
       filter_punc: params.filter_punc || '0',
       needvad: params.needvad || '1',
-      nonce: (params.nonce || Math.floor(Math.random() * 1000000)).toString(),
-      secretid: secretId,
-      timestamp: (params.timestamp || Math.floor(Date.now() / 1000)).toString(),
+      nonce: nonce.toString(),
+      secretid: secretId, // 注意：腾讯云要求小写 secretid
+      timestamp: timestamp.toString(),
       voice_format: params.voice_format || '1',
       voice_id: params.voice_id || generateUUID(),
     };
@@ -86,17 +91,30 @@ export default async function handler(
     // 按字典序排序参数键
     const sortedKeys = Object.keys(sortedParams).sort();
     
-    // 构建参数字符串
+    // 构建参数字符串（注意：值需要 URL 编码）
     const paramString = sortedKeys
-      .map(key => `${key}=${encodeURIComponent(sortedParams[key])}`)
+      .map(key => {
+        const value = sortedParams[key];
+        // 确保值被正确编码
+        return `${key}=${encodeURIComponent(value)}`;
+      })
       .join('&');
 
-    // 构建完整签名字符串
+    // 构建完整签名字符串（注意：不包含协议和端口）
     const signString = `asr.cloud.tencent.com/asr/v2/${appId}?${paramString}`;
+
+    // 调试日志（生产环境可移除）
+    console.log('签名调试信息:', {
+      signString: signString.substring(0, 200) + '...', // 只显示前200字符
+      secretKeyLength: secretKey.length,
+      secretKeyPrefix: secretKey.substring(0, 5) + '...',
+      secretId: secretId,
+      appId: appId,
+    });
 
     // HMAC-SHA1 加密
     const hmac = crypto.createHmac('sha1', secretKey);
-    hmac.update(signString);
+    hmac.update(signString, 'utf8'); // 明确指定编码
     const signature = hmac.digest('base64');
 
     // URL 编码
@@ -106,7 +124,12 @@ export default async function handler(
     return res.status(200).json({
       signature: finalSignature,
       params: sortedParams,
-      signString: signString, // 调试用，生产环境可移除
+      // 调试信息（生产环境可移除）
+      debug: {
+        signStringLength: signString.length,
+        signatureLength: finalSignature.length,
+        hasSecretKey: !!secretKey,
+      },
     });
 
   } catch (error: any) {
@@ -128,3 +151,4 @@ function generateUUID(): string {
     return v.toString(16);
   });
 }
+
