@@ -9,8 +9,8 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     sourcemap: false,
-    // 启用压缩
-    minify: 'terser',
+    // 启用压缩（使用 esbuild，Vite 默认，更快且无需额外依赖）
+    minify: 'esbuild',
     // 分块策略
     rollupOptions: {
       output: {
