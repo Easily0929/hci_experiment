@@ -1,4 +1,21 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+// Vercel Serverless Functions 类型定义
+interface VercelRequest {
+  method?: string;
+  url?: string;
+  headers?: Record<string, string | string[] | undefined>;
+  query?: Record<string, string | string[]>;
+  body?: any;
+  cookies?: Record<string, string>;
+}
+
+interface VercelResponse {
+  status(code: number): VercelResponse;
+  json(data: any): VercelResponse;
+  send(data: any): VercelResponse;
+  end(): VercelResponse;
+  setHeader(name: string, value: string): VercelResponse;
+}
+
 import crypto from 'crypto';
 
 /**
@@ -111,4 +128,3 @@ function generateUUID(): string {
     return v.toString(16);
   });
 }
-
