@@ -1,4 +1,48 @@
-// App.tsx - HCI实验平台完整代码
+/**
+ * HCI实验平台 - 主应用文件
+ * 
+ * 模块设计：
+ * 
+ * 1. 配置与工具模块
+ *    - Supabase 数据库客户端（单例模式）
+ *    - 环境变量配置
+ *    - 类型定义（Condition, InputMode, AppView, VoiceModelConfig, Message）
+ * 
+ * 2. UI组件模块
+ *    - AudioVisualizer: 音频可视化组件
+ *    - PersistentTextInput: 持久化文本输入组件
+ *    - ChatMessage: 聊天消息展示组件
+ * 
+ * 3. 语音识别模块（useEdgeSpeechRecognition Hook）
+ *    - 前端 HMAC-SHA1 签名生成（腾讯云）
+ *    - 腾讯云 WebSocket 实时语音识别
+ *    - 音频采集与处理（16kHz, 单声道, 16-bit PCM）
+ *    - 麦克风权限管理
+ *    - 重连机制与错误处理
+ * 
+ * 4. 主界面模块（HCIExperimentPlatform 组件）
+ *    - 登录界面（LoginView）: 用户登录与实验条件分配
+ *    - 参与者界面（ParticipantView）: 语音/文本对话交互
+ *    - 管理员界面（AdminView）: 语音模型配置管理
+ *    - 数据仪表板（DashboardView）: 实验数据统计与可视化
+ *    - 感谢界面（ThankYouView）: 实验结束页面
+ * 
+ * 5. 核心业务逻辑模块
+ *    - processMessageExchange: 消息处理与对话流程
+ *    - 文本LLM调用（DashScope Qwen）
+ *    - 语音合成（Qwen-TTS-Realtime / 浏览器原生TTS）
+ *    - 数据上传（Supabase）
+ *    - 语音识别结果自动提交
+ * 
+ * 6. 状态管理模块
+ *    - 用户状态（userId, sessionId, participantName）
+ *    - 实验条件（assignedCondition）
+ *    - 输入模式（selectedInputMode: 'voice' | 'text'）
+ *    - 交互状态（interactionState: 'idle' | 'listen' | 'process' | 'speak'）
+ *    - 语音模型配置（voiceModelList, assignedVoiceModel）
+ *    - 对话日志（logs）
+ */
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -10,7 +54,6 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { createClient } from '@supabase/supabase-js';
 
-// 定义 SpeechRecognition 类型
 declare global {
   interface Window {
     SpeechRecognition: any;
@@ -18,12 +61,9 @@ declare global {
   }
 }
 
-// --- 配置区 ---
-// 从环境变量读取配置，如果没有则使用默认值（向后兼容）
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://pqhrtviidwuwspubaxfm.supabase.co';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxaHJ0dmlpZHd1d3NwdWJheGZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjQ1NTQwNzEsImV4cCI6MjA4MDEzMDA3MX0.2UXvn6wk9Qlhq_HnRKm5bqIrFKwwPTuBq0kyXxa-WDI';
 
-// 创建单例的Supabase客户端，避免重复实例
 let supabaseInstance: ReturnType<typeof createClient> | null = null;
 
 const getSupabaseClient = () => {
@@ -39,8 +79,6 @@ const getSupabaseClient = () => {
   }
   return supabaseInstance;
 };
-
-// --- 类型定义 ---
 type Condition = 'AI_Model' | 'Human_Partner';
 type InputMode = 'text' | 'voice';
 type AppView = 'login' | 'participant' | 'admin' | 'dashboard' | 'thank_you';
@@ -50,6 +88,7 @@ type VoiceModelConfig = {
   recognitionType: 'browser' | 'custom';
   recognitionUrl?: string;
   recognitionKey?: string;
+  recognitionSecretKey?: string;
   recognitionModel?: string;
   synthesisType: 'browser' | 'custom';
   synthesisUrl?: string;
@@ -72,7 +111,6 @@ type Message = {
   content: string; timestamp: number; latency?: number;
 };
 
-// --- 音频可视化组件 ---
 const AudioVisualizer = ({ isActive, mode, volumeLevel = 0 }: { isActive: boolean; mode: string; volumeLevel?: number }) => {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -99,7 +137,6 @@ const AudioVisualizer = ({ isActive, mode, volumeLevel = 0 }: { isActive: boolea
   return <canvas ref={ref} width={600} height={150} className="w-full h-full" />;
 };
 
-// --- 修复的文本输入组件 ---
 const PersistentTextInput = React.memo(({
   onSubmit,
   disabled,
@@ -199,7 +236,6 @@ const PersistentTextInput = React.memo(({
 
 PersistentTextInput.displayName = 'PersistentTextInput';
 
-// --- 聊天消息组件 ---
 const ChatMessage = React.memo(({ 
   message, 
   condition,
@@ -249,7 +285,6 @@ const ChatMessage = React.memo(({
 
 ChatMessage.displayName = 'ChatMessage';
 
-// --- Edge浏览器语音识别Hook（优化版）---
 const useEdgeSpeechRecognition = (
   onResult?: (text: string) => void,
   voiceModel?: VoiceModelConfig | null
@@ -275,9 +310,9 @@ const useEdgeSpeechRecognition = (
   const reconnectDelayRef = useRef(1000);
   const isManualStopRef = useRef(false);
   
-  // 从后端 API 获取腾讯云签名（推荐方案，更安全）
-  const getTencentCloudSignature = useCallback(async (
+  const generateTencentCloudSignature = useCallback(async (
     secretId: string,
+    secretKey: string,
     appId: string,
     params: {
       engine_model_type?: string;
@@ -293,39 +328,88 @@ const useEdgeSpeechRecognition = (
     }
   ): Promise<{ signature: string; params: Record<string, string> } | null> => {
     try {
-      const response = await fetch('/api/tencent-signature', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          secretId,
-          appId,
-          params,
-        }),
-      });
+      const timestamp = params.timestamp || Math.floor(Date.now() / 1000);
+      const nonce = params.nonce || Math.floor(Math.random() * 1000000);
+      const expired = timestamp + 300;
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-      }
+      const sortedParams: Record<string, string> = {
+        engine_model_type: params.engine_model_type || '16k_zh',
+        expired: expired.toString(),
+        filter_dirty: params.filter_dirty || '0',
+        filter_modal: params.filter_modal || '0',
+        filter_punc: params.filter_punc || '0',
+        needvad: params.needvad || '1',
+        nonce: nonce.toString(),
+        secretid: secretId,
+        timestamp: timestamp.toString(),
+        voice_format: params.voice_format || '1',
+        voice_id: params.voice_id || uuidv4(),
+      };
 
-      const data = await response.json();
+      const sortedKeys = Object.keys(sortedParams).sort();
+      const paramString = sortedKeys
+        .map(key => `${key}=${encodeURIComponent(sortedParams[key])}`)
+        .join('&');
+
+      const signString = `asr.cloud.tencent.com/asr/v2/${appId}?${paramString}`;
+
+      const encoder = new TextEncoder();
+      const keyData = encoder.encode(secretKey);
+      const messageData = encoder.encode(signString);
+
+      const cryptoKey = await crypto.subtle.importKey(
+        'raw',
+        keyData,
+        { name: 'HMAC', hash: 'SHA-1' },
+        false,
+        ['sign']
+      );
+
+      const signatureBuffer = await crypto.subtle.sign('HMAC', cryptoKey, messageData);
+      const signatureArray = Array.from(new Uint8Array(signatureBuffer));
+      const signatureBase64 = btoa(String.fromCharCode(...signatureArray));
+      const finalSignature = encodeURIComponent(signatureBase64);
+
+      console.log('✅ 签名生成成功');
+
       return {
-        signature: data.signature,
-        params: data.params,
+        signature: finalSignature,
+        params: sortedParams,
       };
     } catch (err: any) {
-      console.error('从后端获取签名失败:', err);
-      setError(`获取签名失败: ${err.message}\n\n请检查：\n1. 后端 API 是否正常运行\n2. 环境变量 TENCENT_CLOUD_SECRET_KEY 是否已配置\n3. 网络连接是否正常`);
+      console.error('签名生成错误:', err);
+      setError(`签名生成失败: ${err.message}\n\n请检查：\n1. SecretId 和 SecretKey 是否正确\n2. 浏览器是否支持 Web Crypto API`);
       return null;
     }
   }, []);
   
-  // 检查麦克风权限（使用 ref 避免闭包问题）
+  // 检测识别服务提供商
+  const detectRecognitionProvider = useCallback((url?: string): 'tencent' | 'aliyun' | 'unknown' => {
+    if (!url) return 'unknown';
+    
+    try {
+      const urlObj = new URL(url);
+      const hostname = urlObj.hostname.toLowerCase();
+      
+      // 检测腾讯云
+      if (hostname.includes('tencent.com') || hostname.includes('asr.cloud.tencent.com')) {
+        return 'tencent';
+      }
+      
+      // 检测阿里云
+      if (hostname.includes('aliyun.com') || hostname.includes('dashscope.aliyuncs.com') || hostname.includes('alicloud')) {
+        return 'aliyun';
+      }
+      
+      return 'unknown';
+    } catch (err) {
+      console.warn('URL解析失败:', err);
+      return 'unknown';
+    }
+  }, []);
+
   const checkMicrophonePermission = useCallback(async (): Promise<boolean> => {
     try {
-      // 首先尝试直接获取麦克风权限（这会触发浏览器权限请求）
       try {
         console.log('🎤 正在请求麦克风权限...');
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -346,22 +430,27 @@ const useEdgeSpeechRecognition = (
           setError('麦克风被其他程序占用。\n\n请关闭：\n1. Zoom、Teams、微信等视频通话软件\n2. 其他正在使用麦克风的应用程序\n3. 然后刷新页面重试');
           return false;
         }
-        // 其他错误，继续尝试（可能是临时问题）
         console.warn('麦克风权限检查警告，继续尝试:', err);
         return true;
       }
     } catch (err) {
-      // 某些浏览器不支持相关 API，继续尝试
       console.warn('权限检查API不支持，继续尝试:', err);
       return true;
     }
   }, []);
   
-  // 腾讯云语音识别实现（改进版）
   const startTencentCloudASR = useCallback(async (isReconnect = false) => {
     if (!voiceModel?.recognitionUrl || !voiceModel?.recognitionKey) {
       setError('腾讯云语音识别配置不完整。请检查识别服务 URL 和 SecretId 是否已配置。');
       setIsSupported(false);
+      return;
+    }
+
+    // 再次确认是腾讯云URL
+    const provider = detectRecognitionProvider(voiceModel.recognitionUrl);
+    if (provider === 'aliyun') {
+      setError('❌ 配置错误：检测到阿里云URL，但正在使用腾讯云识别逻辑。请检查 recognitionUrl 配置。');
+      setIsListening(false);
       return;
     }
 
@@ -374,7 +463,7 @@ const useEdgeSpeechRecognition = (
       }
       console.log(`🔄 尝试重连（第 ${reconnectAttemptsRef.current} 次）...`);
       await new Promise(resolve => setTimeout(resolve, reconnectDelayRef.current));
-      reconnectDelayRef.current *= 2; // 指数退避
+      reconnectDelayRef.current *= 2;
     } else {
       reconnectAttemptsRef.current = 0;
       reconnectDelayRef.current = 1000;
@@ -383,7 +472,6 @@ const useEdgeSpeechRecognition = (
 
     console.log('🎤 启动腾讯云实时语音识别...');
     
-    // 检查麦克风权限
     const hasPermission = await checkMicrophonePermission();
     if (!hasPermission) {
       console.error('❌ 麦克风权限检查失败');
@@ -392,7 +480,6 @@ const useEdgeSpeechRecognition = (
     }
 
     try {
-      // 获取麦克风流（如果不是重连，才重新获取）
       if (!microphoneStreamRef.current) {
         const stream = await navigator.mediaDevices.getUserMedia({ 
           audio: {
@@ -404,20 +491,17 @@ const useEdgeSpeechRecognition = (
         });
         microphoneStreamRef.current = stream;
 
-        // 创建音频上下文
         const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
           sampleRate: 16000
         });
         audioContextRef.current = audioContext;
 
-        // 创建音频分析器（用于音量检测）
         const analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
         analyserRef.current = analyser;
         const source = audioContext.createMediaStreamSource(stream);
         source.connect(analyser);
 
-        // 定期检查音量
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
         volumeCheckIntervalRef.current = setInterval(() => {
           analyser.getByteFrequencyData(dataArray);
@@ -428,20 +512,17 @@ const useEdgeSpeechRecognition = (
           }
         }, 100);
 
-        // 创建音频处理器（用于采集音频数据）
         const processor = audioContext.createScriptProcessor(4096, 1, 1);
         audioProcessorRef.current = processor;
         
         processor.onaudioprocess = (e) => {
           if (websocketRef.current?.readyState === WebSocket.OPEN && !isManualStopRef.current) {
             const inputData = e.inputBuffer.getChannelData(0);
-            // 转换为 16-bit PCM
             const pcmData = new Int16Array(inputData.length);
             for (let i = 0; i < inputData.length; i++) {
               const s = Math.max(-1, Math.min(1, inputData[i]));
               pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
             }
-            // 发送音频数据到腾讯云
             try {
               websocketRef.current.send(pcmData.buffer);
             } catch (err) {
@@ -454,23 +535,28 @@ const useEdgeSpeechRecognition = (
         processor.connect(audioContext.destination);
       }
 
-      // 构建 WebSocket URL
-      // 使用后端 API 获取签名（更安全，避免在前端暴露 SecretKey）
       let wsUrl = voiceModel.recognitionUrl;
       
       try {
-        // 解析基础URL（提取 appId 和基础路径）
+        const secretKey = voiceModel.recognitionSecretKey || 'nNpJhuuzEQSGrGf0A7750pT0X3OVSRMI';
+        
+        if (!voiceModel.recognitionKey) {
+          throw new Error('SecretId (recognitionKey) 未配置');
+        }
+        
+        if (!secretKey) {
+          throw new Error('SecretKey 未配置，请在 voiceModel 中添加 recognitionSecretKey 字段');
+        }
+        
         const urlObj = new URL(wsUrl);
         const baseUrl = `${urlObj.protocol}//${urlObj.host}${urlObj.pathname}`;
         
-        // 从路径中提取 appId（格式：/asr/v2/{appId}）
         const pathMatch = urlObj.pathname.match(/\/asr\/v2\/(\d+)/);
         if (!pathMatch) {
           throw new Error('无法从 URL 中提取 AppId，请确保 URL 格式为：wss://asr.cloud.tencent.com/asr/v2/{appId}');
         }
         const appId = pathMatch[1];
         
-        // 获取已有参数（保留配置参数）
         const existingParams = new URLSearchParams(urlObj.search);
         const engineModelType = existingParams.get('engine_model_type') || '16k_zh';
         const voiceFormat = existingParams.get('voice_format') || '1';
@@ -480,15 +566,14 @@ const useEdgeSpeechRecognition = (
         const filterPunc = existingParams.get('filter_punc') || '0';
         const convertNumMode = existingParams.get('convert_num_mode') || '1';
         
-        // 生成 voice_id（UUID格式）
         const voiceId = uuidv4();
         const timestamp = Math.floor(Date.now() / 1000);
         const nonce = Math.floor(Math.random() * 1000000);
         
-        // 从后端 API 获取签名
-        console.log('🔐 正在从后端获取签名...');
-        const signatureResult = await getTencentCloudSignature(
-          voiceModel.recognitionKey, // SecretId
+        console.log('🔐 正在生成腾讯云签名（前端）...');
+        const signatureResult = await generateTencentCloudSignature(
+          voiceModel.recognitionKey,
+          secretKey,
           appId,
           {
             engine_model_type: engineModelType,
@@ -505,10 +590,9 @@ const useEdgeSpeechRecognition = (
         );
         
         if (!signatureResult) {
-          throw new Error('获取签名失败，请检查后端配置');
+          throw new Error('签名生成失败，请检查 SecretId 和 SecretKey 配置');
         }
         
-        // 使用后端返回的参数和签名构建 URL
         const params = new URLSearchParams();
         Object.entries(signatureResult.params).forEach(([key, value]) => {
           params.append(key, value);
@@ -516,24 +600,22 @@ const useEdgeSpeechRecognition = (
         params.set('signature', signatureResult.signature);
         
         wsUrl = `${baseUrl}?${params.toString()}`;
-        console.log('✅ 签名获取成功，WebSocket URL 已构建');
+        console.log('✅ 签名生成成功，WebSocket URL 已构建');
       } catch (err: any) {
         console.error('构建 WebSocket URL 失败:', err);
-        setError(`构建连接 URL 失败: ${err.message}\n\n请检查：\n1. 识别服务 URL 格式是否正确（应包含 AppId）\n2. 后端 API 是否正常运行\n3. 环境变量是否已配置`);
+        setError(`构建连接 URL 失败: ${err.message}\n\n请检查：\n1. 识别服务 URL 格式是否正确（应包含 AppId）\n2. SecretId 和 SecretKey 是否正确配置\n3. 浏览器是否支持 Web Crypto API`);
         setIsListening(false);
         return;
       }
       
       console.log('🔌 连接腾讯云 WebSocket...', wsUrl.substring(0, 80) + '...');
       
-      // 设置连接超时
       const connectTimeout = setTimeout(() => {
         if (websocketRef.current?.readyState !== WebSocket.OPEN) {
           console.error('❌ WebSocket 连接超时');
           if (websocketRef.current) {
             websocketRef.current.close();
           }
-          // 尝试重连
           if (!isManualStopRef.current && reconnectAttemptsRef.current < maxReconnectAttempts) {
             startTencentCloudASR(true);
           } else {
@@ -541,26 +623,22 @@ const useEdgeSpeechRecognition = (
             setIsListening(false);
           }
         }
-      }, 10000); // 10秒超时
+      }, 10000);
       
-      // 创建 WebSocket 连接
       const ws = new WebSocket(wsUrl);
       websocketRef.current = ws;
 
       ws.onopen = () => {
         clearTimeout(connectTimeout);
         console.log('✅ 腾讯云 WebSocket 连接成功，等待握手响应...');
-        // 注意：根据腾讯云文档，连接成功后后台会自动返回握手响应
-        // 不需要发送初始化消息，等待后台返回 {"code":0,"message":"success","voice_id":"..."}
         setIsListening(true);
         hasResultRef.current = false;
         if (!isReconnect) {
           transcriptResultRef.current = { final: '', interim: '' };
         }
-        reconnectAttemptsRef.current = 0; // 重置重连计数
-        reconnectDelayRef.current = 1000; // 重置延迟
+        reconnectAttemptsRef.current = 0;
+        reconnectDelayRef.current = 1000;
         
-        // 设置识别超时（30秒）
         timeoutRef.current = setTimeout(() => {
           if (!hasResultRef.current && websocketRef.current) {
             console.warn('⏱️ 语音识别超时（30秒）');
@@ -568,7 +646,6 @@ const useEdgeSpeechRecognition = (
             if (!result.final.trim() && !result.interim.trim()) {
               setError('录音超时（30秒）。\n\n请尝试：\n1. 确保麦克风正常工作\n2. 说话时声音清晰、音量适中\n3. 检查麦克风音量设置\n4. 在安静环境下使用');
             }
-            // 发送结束消息后关闭连接
             if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
               try {
                 websocketRef.current.send(JSON.stringify({ type: 'end' }));
@@ -590,18 +667,15 @@ const useEdgeSpeechRecognition = (
           const data = JSON.parse(event.data);
           console.log('📨 收到腾讯云消息:', data);
 
-          // 处理握手响应（根据腾讯云文档格式）
           if (data.code === 0 && data.voice_id && !data.result) {
             console.log('✅ 握手成功，voice_id:', data.voice_id);
-            // 握手成功，可以开始发送音频数据
             return;
           }
 
-          // 处理识别结果（根据腾讯云文档格式）
           if (data.code === 0 && data.result) {
             const result = data.result;
             const text = result.voice_text_str || '';
-            const isFinal = data.final === 1; // 最终结果判断
+            const isFinal = data.final === 1;
 
             if (text) {
               if (isFinal) {
@@ -610,20 +684,16 @@ const useEdgeSpeechRecognition = (
                 setTranscript(text);
                 console.log('✅ 腾讯云最终识别结果:', text);
                 
-                // 清理超时
                 if (timeoutRef.current) {
                   clearTimeout(timeoutRef.current);
                   timeoutRef.current = null;
                 }
                 
-                // 根据腾讯云文档，收到最终结果后发送结束消息
                 isManualStopRef.current = true;
                 if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
                   try {
-                    // 发送结束消息，通知后台结束识别
                     websocketRef.current.send(JSON.stringify({ type: 'end' }));
                     console.log('📤 已发送结束识别消息');
-                    // 等待后台返回 final=1 后关闭连接
                     setTimeout(() => {
                       if (websocketRef.current) {
                         websocketRef.current.close();
@@ -645,7 +715,6 @@ const useEdgeSpeechRecognition = (
                 console.log('⏳ 腾讯云临时识别结果:', text);
               }
             } else if (isFinal) {
-              // 收到 final=1 但没有文本，表示识别完成（后台已处理完所有音频）
               console.log('✅ 识别完成（final=1）');
               const finalText = transcriptResultRef.current.final.trim() || transcriptResultRef.current.interim.trim();
               if (finalText) {
@@ -655,13 +724,11 @@ const useEdgeSpeechRecognition = (
                   setTimeout(() => onResult(finalText), 200);
                 }
               }
-              // 清理超时
               if (timeoutRef.current) {
                 clearTimeout(timeoutRef.current);
                 timeoutRef.current = null;
               }
               isManualStopRef.current = true;
-              // 后台已返回 final=1，可以关闭连接
               if (websocketRef.current) {
                 setTimeout(() => {
                   if (websocketRef.current) {
@@ -671,32 +738,25 @@ const useEdgeSpeechRecognition = (
               }
             }
           } else if (data.code !== 0) {
-            // 处理错误（根据腾讯云文档格式）
             const errorMsg = data.message || '未知错误';
             const errorCode = data.code;
             console.error('❌ 腾讯云识别错误:', errorCode, errorMsg);
             
-            // 清理超时
             if (timeoutRef.current) {
               clearTimeout(timeoutRef.current);
               timeoutRef.current = null;
             }
             
-            // 根据错误码决定是否重连
             if (errorCode === 4002 || errorCode === 4001) {
-              // 鉴权失败或参数不合法
               setError(`腾讯云配置错误: ${errorMsg}\n\n请检查：\n1. SecretId 是否正确\n2. 识别服务 URL 是否正确\n3. 签名是否正确\n4. 是否已开通实时语音识别服务`);
               setIsListening(false);
             } else if (errorCode === 4003) {
-              // AppID 服务未开通
               setError(`服务未开通: ${errorMsg}\n\n请在腾讯云控制台开通实时语音识别服务`);
               setIsListening(false);
             } else if (errorCode === 4004) {
-              // 资源包耗尽
               setError(`资源包耗尽: ${errorMsg}\n\n请购买资源包或开通后付费`);
               setIsListening(false);
             } else if (!isManualStopRef.current && reconnectAttemptsRef.current < maxReconnectAttempts) {
-              // 可恢复的错误，尝试重连
               console.log('🔄 尝试重连...');
               startTencentCloudASR(true);
             } else {
@@ -713,7 +773,6 @@ const useEdgeSpeechRecognition = (
         clearTimeout(connectTimeout);
         console.error('❌ 腾讯云 WebSocket 错误:', error);
         
-        // 如果不是手动停止，尝试重连
         if (!isManualStopRef.current && reconnectAttemptsRef.current < maxReconnectAttempts) {
           console.log('🔄 连接错误，尝试重连...');
           startTencentCloudASR(true);
@@ -792,19 +851,17 @@ const useEdgeSpeechRecognition = (
         setIsListening(false);
       }
     }
-  }, [voiceModel, checkMicrophonePermission, onResult, getTencentCloudSignature]);
+  }, [voiceModel, checkMicrophonePermission, onResult, generateTencentCloudSignature, detectRecognitionProvider]);
 
   const startListening = useCallback(async () => {
     console.log('🎤 开始启动语音识别...');
     
-    // 清理之前的状态
     setError('');
     setTranscript('');
     hasResultRef.current = false;
-    retryCountRef.current = 0; // 重置重试计数
-    maxVolumeRef.current = 0; // 重置最大音量记录
+    retryCountRef.current = 0;
+    maxVolumeRef.current = 0;
     
-    // 清理之前的音频分析
     if (volumeCheckIntervalRef.current) {
       clearInterval(volumeCheckIntervalRef.current);
       volumeCheckIntervalRef.current = null;
@@ -826,12 +883,10 @@ const useEdgeSpeechRecognition = (
       websocketRef.current = null;
     }
     
-    // 如果已有识别实例在运行，先停止
     if (recognitionRef.current) {
       console.log('⚠️ 检测到已有识别实例，先停止...');
       try {
         recognitionRef.current.stop();
-        // 等待停止完成
         await new Promise(resolve => setTimeout(resolve, 300));
       } catch (e) {
         console.warn('停止旧实例时出错:', e);
@@ -839,24 +894,21 @@ const useEdgeSpeechRecognition = (
       recognitionRef.current = null;
     }
     
-    // 清理之前的超时
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
-
-    // 根据配置选择识别方式
+    
     console.log('🔍 检查识别配置:', {
       recognitionType: voiceModel?.recognitionType,
       recognitionUrl: voiceModel?.recognitionUrl,
       recognitionKey: voiceModel?.recognitionKey ? '已设置' : '未设置',
+      recognitionSecretKey: voiceModel?.recognitionSecretKey ? '已设置' : '未设置（将使用默认值）',
       hasModel: !!voiceModel,
       modelId: voiceModel?.id,
       modelAlias: voiceModel?.alias,
-      fullModel: voiceModel
     });
     
-    // 如果配置不正确，给出明确提示
     if (!voiceModel) {
       console.error('❌ 语音模型未分配！');
       setError('语音模型未分配，请重新登录');
@@ -864,399 +916,45 @@ const useEdgeSpeechRecognition = (
       return;
     }
     
-    if (voiceModel.recognitionType === 'custom' && !voiceModel.recognitionUrl) {
-      console.error('❌ 腾讯云识别 URL 未配置！');
-      setError('腾讯云识别服务 URL 未配置。请进入管理员界面配置识别服务 URL。');
-      setIsListening(false);
-      return;
-    }
-    
-    if (voiceModel.recognitionType === 'custom' && !voiceModel.recognitionKey) {
-      console.error('❌ 腾讯云 SecretId 未配置！');
-      setError('腾讯云 SecretId 未配置。请进入管理员界面配置 SecretId。');
-      setIsListening(false);
-      return;
-    }
-    
-    // 强制使用腾讯云语音识别（不再使用浏览器原生识别）
     if (!voiceModel.recognitionUrl) {
-      console.error('❌ 腾讯云识别 URL 未配置！');
-      setError('腾讯云识别服务 URL 未配置。请进入管理员界面配置识别服务 URL。');
+      console.error('❌ 识别服务 URL 未配置！');
+      setError('识别服务 URL 未配置。请进入管理员界面配置识别服务 URL。');
       setIsListening(false);
       return;
     }
     
-    if (!voiceModel.recognitionKey) {
-      console.error('❌ 腾讯云 SecretId 未配置！');
-      setError('腾讯云 SecretId 未配置。请进入管理员界面配置 SecretId。');
+    // 检测服务提供商
+    const provider = detectRecognitionProvider(voiceModel.recognitionUrl);
+    console.log('🔍 检测到服务提供商:', provider, 'URL:', voiceModel.recognitionUrl);
+    
+    if (provider === 'aliyun') {
+      console.error('❌ 检测到阿里云语音识别URL，但当前代码仅支持腾讯云实时语音识别！');
+      setError(`❌ 服务不匹配错误\n\n检测到您配置的是阿里云语音识别服务，但当前代码仅支持腾讯云实时语音识别（WebSocket）。\n\n解决方案：\n1. 将 recognitionUrl 改为腾讯云格式：\n   wss://asr.cloud.tencent.com/asr/v2/{AppId}\n\n2. 确保 recognitionKey 是腾讯云的 SecretId\n3. 确保 recognitionSecretKey 是腾讯云的 SecretKey\n\n或者：\n- 联系开发者添加阿里云语音识别支持（需要重写识别逻辑）\n\n当前配置的URL：${voiceModel.recognitionUrl}`);
       setIsListening(false);
       return;
     }
     
-    // 使用腾讯云语音识别
-    console.log('✅ 强制使用腾讯云语音识别（浏览器识别已禁用）');
-    await startTencentCloudASR();
-    return;
+    if (provider === 'unknown') {
+      console.warn('⚠️ 无法识别服务提供商，尝试使用腾讯云逻辑...');
+      // 继续尝试，但给出警告
+    }
     
-    // ========== 以下浏览器原生识别代码已完全禁用 ==========
-    // 强制使用腾讯云识别，不再使用浏览器 Web Speech API
-    /*
-    const userAgent = navigator.userAgent;
-    const isEdge = /Edg\/\d+/.test(userAgent);
-    const isChrome = /Chrome\/\d+/.test(userAgent) && !/Edg\/\d+/.test(userAgent);
-    
-    if (!isEdge && !isChrome) {
-      setError('请使用Edge或Chrome浏览器以获得最佳语音识别体验');
-      setIsSupported(false);
+    if (provider === 'tencent' || provider === 'unknown') {
+      if (!voiceModel.recognitionKey) {
+        console.error('❌ 腾讯云 SecretId 未配置！');
+        setError('腾讯云 SecretId 未配置。请进入管理员界面配置 SecretId。');
+        setIsListening(false);
+        return;
+      }
+      
+      console.log('✅ 使用腾讯云语音识别');
+      await startTencentCloudASR();
       return;
     }
     
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setError('您的浏览器不支持语音识别API。请更新到最新版Edge或Chrome。');
-      setIsSupported(false);
-      return;
-    }
-    
-    console.log('✅ 浏览器支持语音识别，检查麦克风权限...');
-    
-    // 检查麦克风权限（必须先获取权限才能启动语音识别）
-    const hasPermission = await checkMicrophonePermission();
-    if (!hasPermission) {
-      console.error('❌ 麦克风权限检查失败');
-      setIsListening(false);
-      return;
-    }
-    
-    console.log('✅ 麦克风权限已通过，等待一小段时间确保权限生效...');
-    // 等待一小段时间，确保权限完全生效
-    await new Promise(resolve => setTimeout(resolve, 200));
-    
-    // 启动麦克风音量检测
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      microphoneStreamRef.current = stream;
-      
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      audioContextRef.current = audioContext;
-      
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
-      analyserRef.current = analyser;
-      
-      const source = audioContext.createMediaStreamSource(stream);
-      source.connect(analyser);
-      
-      // 定期检查音量
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      volumeCheckIntervalRef.current = setInterval(() => {
-        analyser.getByteFrequencyData(dataArray);
-        const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-        const volume = Math.round(average);
-        if (volume > maxVolumeRef.current) {
-          maxVolumeRef.current = volume;
-        }
-        // 实时音量日志（仅在开发时使用）
-        if (volume > 10) {
-          console.log('🎤 检测到音量:', volume);
-        }
-      }, 100);
-    } catch (err) {
-      console.warn('无法启动音量检测:', err);
-    }
-    
-    console.log('✅ 创建语音识别实例...');
-    
-    // 创建新的识别实例
-    let recognition;
-    try {
-      recognition = new SpeechRecognition();
-      console.log('✅ 语音识别实例创建成功');
-    } catch (err: any) {
-      console.error('❌ 创建语音识别实例失败:', err);
-      setError(`无法创建语音识别实例: ${err.message || '未知错误'}\n\n请尝试刷新页面或重启浏览器。`);
-      setIsListening(false);
-      return;
-    }
-    
-    recognitionRef.current = recognition;
-    
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = 'zh-CN';
-    recognition.maxAlternatives = 1;
-    
-    console.log('✅ 语音识别配置完成:', {
-      continuous: recognition.continuous,
-      interimResults: recognition.interimResults,
-      lang: recognition.lang
-    });
-    
-    // 重置结果跟踪
-    transcriptResultRef.current = { final: '', interim: '' };
-    
-    recognition.onstart = () => {
-      console.log('✅ 语音识别已成功启动！');
-      setIsListening(true);
-      hasResultRef.current = false;
-      transcriptResultRef.current = { final: '', interim: '' };
-      
-      // 设置超时时间（15秒）
-      timeoutRef.current = setTimeout(() => {
-        if (!hasResultRef.current && recognitionRef.current) {
-          console.warn('⏱️ 语音识别超时（15秒）');
-          try {
-            recognitionRef.current.stop();
-          } catch (e) {
-            console.log('超时停止识别时出错:', e);
-          }
-          const result = transcriptResultRef.current;
-          if (!result.final.trim() && !result.interim.trim()) {
-            setError('录音超时（15秒）。\n\n请尝试：\n1. 确保麦克风正常工作\n2. 说话时声音清晰、音量适中\n3. 检查麦克风音量设置\n4. 在安静环境下使用\n5. 点击"重试"按钮');
-          }
-          setIsListening(false);
-        }
-      }, 15000); // 15秒超时
-    };
-    
-    recognition.onresult = (event: any) => {
-      let interimTranscript = '';
-      let finalTranscript = '';
-      
-      // 累积所有结果（包括之前的结果）
-      const currentResult = transcriptResultRef.current;
-      let accumulatedFinal = currentResult.final || '';
-      let accumulatedInterim = '';
-      
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i];
-        const transcript = result[0].transcript;
-        
-        if (result.isFinal) {
-          finalTranscript += transcript;
-          accumulatedFinal += transcript;
-          hasResultRef.current = true;
-          console.log('识别到最终结果片段:', transcript);
-        } else {
-          interimTranscript += transcript;
-          accumulatedInterim += transcript;
-        }
-      }
-      
-      // 更新 ref 中的结果（累积所有结果）
-      transcriptResultRef.current = {
-        final: accumulatedFinal,
-        interim: accumulatedInterim || interimTranscript
-      };
-      
-      console.log('识别结果更新:', { 
-        final: accumulatedFinal, 
-        interim: accumulatedInterim || interimTranscript,
-        newFinal: finalTranscript,
-        newInterim: interimTranscript
-      });
-      
-      // 更新显示的文本（优先显示最终结果）
-      const displayText = accumulatedFinal || (accumulatedInterim || interimTranscript);
-      if (displayText) {
-        setTranscript(displayText);
-      }
-      
-      // 如果有最终结果，停止识别并准备提交
-      if (finalTranscript || accumulatedFinal) {
-        const finalText = accumulatedFinal || finalTranscript;
-        console.log('有最终结果，准备停止识别:', finalText);
-        // 清理超时
-        if (timeoutRef.current) {
-          clearTimeout(timeoutRef.current);
-          timeoutRef.current = null;
-        }
-        // 确保 transcript 状态已更新
-        setTranscript(finalText);
-        try {
-          recognition.stop();
-        } catch (e) {
-          console.log('停止识别时出错:', e);
-        }
-      }
-    };
-    
-    recognition.onerror = (event: any) => {
-      console.error('语音识别错误:', event.error);
-      
-      // 清理超时
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
-      }
-      
-      let errorMessage = '';
-      let shouldRetry = false;
-      
-      switch (event.error) {
-        case 'no-speech':
-          // no-speech 错误不立即显示，等待onend处理
-          errorMessage = '';
-          shouldRetry = true;
-          break;
-        case 'audio-capture':
-          errorMessage = '无法访问麦克风。\n\n解决方案：\n1. 点击地址栏左侧的麦克风图标\n2. 选择"始终允许此站点使用麦克风"\n3. 检查系统麦克风设置\n4. 确保没有其他程序占用麦克风';
-          break;
-        case 'not-allowed':
-          errorMessage = '麦克风访问被拒绝。\n\n权限设置：\n1. 点击右上角菜单（...）\n2. 选择"设置" → "站点权限"\n3. 找到"麦克风"并允许\n4. 刷新页面后重试';
-          break;
-        case 'service-not-allowed':
-          errorMessage = '语音识别服务不可用。\n\n请检查：\n1. 网络连接是否正常\n2. 是否使用HTTPS（本地开发可用localhost）\n3. 尝试重启浏览器';
-          break;
-        case 'network':
-          // 检查网络状态
-          const isOnline = navigator.onLine;
-          const networkStatus = isOnline ? '✅ 网络在线' : '❌ 网络离线';
-          const protocol = window.location.protocol;
-          const isHttps = protocol === 'https:';
-          
-          errorMessage = `网络错误：无法连接到语音识别服务。\n\n${networkStatus}\n协议: ${isHttps ? '✅ HTTPS' : '⚠️ HTTP'}\n\n可能原因：\n1. 网络连接不稳定或已断开\n2. 防火墙或代理阻止了连接\n3. 语音识别服务（Google/Microsoft）暂时不可用\n4. 在某些地区，语音识别服务可能被限制访问\n\n解决方案：\n1. 检查网络连接是否正常（尝试访问其他网站）\n2. 尝试刷新页面后重试\n3. 检查浏览器是否使用代理（可能需要配置代理或VPN）\n4. 如果使用公司/学校网络，可能需要联系网络管理员开放相关服务\n5. 尝试使用VPN或更换网络环境\n6. 稍后重试（服务可能暂时不可用）\n\n💡 提示：浏览器语音识别需要连接到云端服务（Google或Microsoft），如果网络无法访问这些服务，语音识别将无法工作。`;
-          shouldRetry = true;
-          break;
-        case 'aborted':
-          // 用户主动停止，不显示错误
-          errorMessage = '';
-          break;
-        default:
-          errorMessage = `语音识别出错: ${event.error}\n\n请尝试刷新页面或重启浏览器。`;
-      }
-      
-      if (errorMessage) {
-        setError(errorMessage);
-        // 如果是网络错误且设置了自动重试，延迟后自动重试（最多重试2次）
-        if (shouldRetry && event.error === 'network' && retryCountRef.current < 2) {
-          retryCountRef.current += 1;
-          console.log(`🔄 网络错误，3秒后自动重试（第 ${retryCountRef.current} 次）...`);
-          setTimeout(() => {
-            console.log('🔄 自动重试语音识别...');
-            if (!isListening && recognitionRef.current === null) {
-              startListening();
-            }
-          }, 3000);
-        } else if (shouldRetry && event.error === 'network' && retryCountRef.current >= 2) {
-          console.log('❌ 网络错误重试次数已达上限，请手动重试');
-          setError(errorMessage + '\n\n⚠️ 自动重试已失败，请点击"重试语音"按钮手动重试。');
-        }
-      }
-      setIsListening(false);
-    };
-    
-    recognition.onend = () => {
-      console.log('语音识别结束');
-      setIsListening(false);
-      
-      // 清理超时
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
-      }
-      
-      // 使用 ref 获取最新的识别结果
-      const result = transcriptResultRef.current;
-      console.log('识别结束时的结果:', result);
-      
-      // 确定要使用的文本（优先使用最终结果，否则使用临时结果）
-      const textToUse = result.final.trim() || result.interim.trim();
-      
-      if (textToUse) {
-        console.log('识别到结果，准备设置 transcript:', textToUse);
-        // 立即设置 transcript，确保状态更新
-        setTranscript(textToUse);
-        
-        // 如果有回调函数，直接调用（这是主要的提交方式）
-        if (onResult) {
-          console.log('🚀 通过回调直接提交识别结果:', textToUse);
-          // 使用 setTimeout 确保 transcript 状态已更新
-          setTimeout(() => {
-            onResult(textToUse);
-          }, 200);
-        } else {
-          // 如果没有回调，确保 transcript 状态已设置，等待 useEffect 处理
-          console.log('⚠️ 没有 onResult 回调，等待 useEffect 处理');
-        }
-      } else {
-        console.log('❌ 识别结束时没有结果');
-        // 如果没有结果，检查是否有错误
-        setTimeout(() => {
-          const latestResult = transcriptResultRef.current;
-          // 再次检查是否有结果（可能 onresult 事件延迟到达）
-          const finalText = latestResult.final.trim() || latestResult.interim.trim();
-          if (finalText) {
-            console.log('延迟检查发现结果，设置 transcript:', finalText);
-            setTranscript(finalText);
-            if (onResult) {
-              setTimeout(() => {
-                onResult(finalText);
-              }, 200);
-            }
-          } else {
-            setError(prevError => {
-              // 只有在没有错误且没有结果时才设置错误
-              if (!prevError && !latestResult.final.trim() && !latestResult.interim.trim()) {
-                // 检查是否有音量输入
-                const volumeInfo = maxVolumeRef.current > 0 
-                  ? `\n\n💡 检测信息：\n- 检测到的最大音量: ${maxVolumeRef.current}（0-255）\n- ${maxVolumeRef.current < 20 ? '⚠️ 音量较低，请靠近麦克风并提高说话音量' : maxVolumeRef.current < 50 ? '✅ 音量正常' : '✅ 音量充足'}`
-                  : '\n\n⚠️ 未检测到任何音频输入，请检查麦克风是否正常工作';
-                
-                return `没有检测到语音。${volumeInfo}\n\n请尝试：\n1. 点击"重试"按钮\n2. 说话时保持麦克风距离10-20厘米\n3. 确保在安静环境下清晰说话\n4. 检查麦克风音量是否足够（系统设置中）\n5. 确保浏览器为最新版本\n6. 尝试说一些简单的词语，如"你好"、"测试"`;
-              }
-              return prevError;
-            });
-          }
-          
-          // 清理音频分析资源
-          if (volumeCheckIntervalRef.current) {
-            clearInterval(volumeCheckIntervalRef.current);
-            volumeCheckIntervalRef.current = null;
-          }
-          if (microphoneStreamRef.current) {
-            microphoneStreamRef.current.getTracks().forEach(track => track.stop());
-            microphoneStreamRef.current = null;
-          }
-          if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-            audioContextRef.current.close();
-            audioContextRef.current = null;
-          }
-        }, 500);
-      }
-      
-      recognitionRef.current = null;
-    };
-    
-    try {
-      console.log('🚀 正在启动语音识别...');
-      recognition.start();
-      console.log('✅ 语音识别启动命令已发送');
-    } catch (err: any) {
-      console.error('❌ 启动语音识别失败:', err);
-      
-      // 清理超时
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
-      }
-      
-      let errorMsg = '';
-      
-      if (err.message?.includes('already started') || err.message?.includes('started')) {
-        errorMsg = '语音识别已在运行中。\n\n如果问题持续：\n1. 等待几秒后重试\n2. 刷新页面\n3. 检查浏览器控制台是否有其他错误';
-      } else if (err.message?.includes('not-allowed') || err.message?.includes('permission')) {
-        errorMsg = '麦克风权限被拒绝。\n\n请按以下步骤操作：\n1. 点击地址栏左侧的🔒或🎤图标\n2. 选择"允许"或"始终允许此站点使用麦克风"\n3. 刷新页面后重试';
-      } else {
-        errorMsg = `启动语音识别失败: ${err.message || '未知错误'}\n\n请确保：\n1. Edge/Chrome浏览器已更新到最新版本\n2. 麦克风硬件正常工作\n3. 没有其他程序占用麦克风\n4. 已授予浏览器麦克风权限\n5. 使用HTTPS连接（本地开发可用localhost）`;
-      }
-      
-      setError(errorMsg);
-      setIsListening(false);
-      recognitionRef.current = null;
-    }
-    */
-  }, [voiceModel, startTencentCloudASR]);
+    setError('无法识别语音识别服务提供商，请检查配置');
+    setIsListening(false);
+  }, [voiceModel, startTencentCloudASR, detectRecognitionProvider, checkMicrophonePermission]);
   
   const stopListening = useCallback(() => {
     // 清理超时
@@ -1366,11 +1064,9 @@ const useEdgeSpeechRecognition = (
   };
 };
 
-// --- 主组件 ---
 const HCIExperimentPlatform = () => {
   const [currentView, setCurrentView] = useState<AppView>('login');
   
-  // 用户相关状态
   const [userId, setUserId] = useState<string>(() => {
     const storedUserId = localStorage.getItem('hci_user_id');
     if (storedUserId) return storedUserId;
@@ -1388,21 +1084,16 @@ const HCIExperimentPlatform = () => {
   const [interactionState, setInteractionState] = useState<'idle' | 'listen' | 'process' | 'speak'>('idle');
   const [logs, setLogs] = useState<Message[]>([]);
   
-  // 语音识别结果自动提交的 refs（在 processMessageExchange 定义后使用）
   const previousTranscriptRef = useRef('');
   const submittedTranscriptRef = useRef('');
   const processMessageExchangeRef = useRef<((text: string) => Promise<void>) | null>(null);
   
-  // 语音识别状态
   const speechRecognitionRef = useRef<any>(null);
   const [browserSupport, setBrowserSupport] = useState(true);
   const [recognitionError, setRecognitionError] = useState('');
 
-  // Supabase客户端（使用单例模式）
   const supabase = getSupabaseClient();
 
-  // 语音大模型配置（使用阿里云 DashScope API）
-  // 从 localStorage 读取配置，如果没有则使用默认值
   const [voiceModelList, setVoiceModelList] = useState<VoiceModelConfig[]>(() => {
     try {
       const stored = localStorage.getItem('hci_voice_model_list');
@@ -1414,7 +1105,6 @@ const HCIExperimentPlatform = () => {
     } catch (e) {
       console.warn('读取语音模型配置失败，使用默认值:', e);
     }
-    // 默认配置（已配置腾讯云识别）
     return [
       {
         id: 'model_1',
@@ -1422,6 +1112,7 @@ const HCIExperimentPlatform = () => {
         recognitionType: 'custom',
         recognitionUrl: 'wss://asr.cloud.tencent.com/asr/v2/1342201105',
         recognitionKey: 'AKIDDH9pIYdWHwkPAsPkustsiLm397va3JMC',
+        recognitionSecretKey: 'nNpJhuuzEQSGrGf0A7750pT0X3OVSRMI',
         synthesisType: 'custom',
         synthesisUrl: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/realtime',
         synthesisKey: 'sk-c5e6833061944016adc237cc5bc92da8',
@@ -1439,6 +1130,7 @@ const HCIExperimentPlatform = () => {
         recognitionType: 'custom',
         recognitionUrl: 'wss://asr.cloud.tencent.com/asr/v2/1342201105',
         recognitionKey: 'AKIDDH9pIYdWHwkPAsPkustsiLm397va3JMC',
+        recognitionSecretKey: 'nNpJhuuzEQSGrGf0A7750pT0X3OVSRMI',
         synthesisType: 'custom',
         synthesisUrl: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/realtime',
         synthesisKey: 'sk-c5e6833061944016adc237cc5bc92da8',
@@ -1456,6 +1148,7 @@ const HCIExperimentPlatform = () => {
         recognitionType: 'custom',
         recognitionUrl: 'wss://asr.cloud.tencent.com/asr/v2/1342201105',
         recognitionKey: 'AKIDDH9pIYdWHwkPAsPkustsiLm397va3JMC',
+        recognitionSecretKey: 'nNpJhuuzEQSGrGf0A7750pT0X3OVSRMI',
         synthesisType: 'custom',
         synthesisUrl: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/realtime',
         synthesisKey: 'sk-c5e6833061944016adc237cc5bc92da8',
@@ -1470,7 +1163,6 @@ const HCIExperimentPlatform = () => {
     ];
   });
 
-  // 当 voiceModelList 更新时，自动保存到 localStorage
   useEffect(() => {
     try {
       localStorage.setItem('hci_voice_model_list', JSON.stringify(voiceModelList));
@@ -1480,11 +1172,9 @@ const HCIExperimentPlatform = () => {
     }
   }, [voiceModelList]);
 
-  // 当前用户绑定的语音模型
   const [assignedVoiceModel, setAssignedVoiceModel] = useState<VoiceModelConfig | null>(() => {
     const storedModelId = localStorage.getItem(`hci_user_model_${userId}`);
     if (storedModelId) {
-      // 先从 localStorage 读取最新的 voiceModelList
       try {
         const storedList = localStorage.getItem('hci_voice_model_list');
         if (storedList) {
@@ -1498,14 +1188,12 @@ const HCIExperimentPlatform = () => {
       } catch (e) {
         console.warn('从 localStorage 读取模型列表失败:', e);
       }
-      // 如果 localStorage 读取失败，从 voiceModelList 查找
       const model = voiceModelList.find(m => m.id === storedModelId);
       if (model) return model;
     }
     return null;
   });
 
-  // 当 voiceModelList 更新时，同步更新 assignedVoiceModel（如果用户已绑定模型）
   useEffect(() => {
     const storedModelId = localStorage.getItem(`hci_user_model_${userId}`);
     if (storedModelId && assignedVoiceModel) {
@@ -1520,7 +1208,6 @@ const HCIExperimentPlatform = () => {
     }
   }, [voiceModelList, userId, assignedVoiceModel]);
   
-  // 使用修复后的语音识别Hook（传入当前语音模型配置）
   const {
     isListening: speechListening,
     transcript,
@@ -1529,7 +1216,6 @@ const HCIExperimentPlatform = () => {
     startListening,
     stopListening,
   } = useEdgeSpeechRecognition((text) => {
-    // 当识别完成时，直接提交
     console.log('🎯 识别完成回调触发，检查条件:', {
       text,
       textTrimmed: text?.trim(),
@@ -1539,9 +1225,7 @@ const HCIExperimentPlatform = () => {
     });
     
     if (text && text.trim()) {
-      // 不检查 interactionState 和 currentView，直接提交
       console.log('✅ 条件满足，准备提交消息:', text);
-      // 使用 ref 来访问 processMessageExchange
       if (processMessageExchangeRef.current) {
         console.log('🚀 调用 processMessageExchange');
         processMessageExchangeRef.current(text);
@@ -1561,14 +1245,12 @@ const HCIExperimentPlatform = () => {
     }
   }, assignedVoiceModel);
   
-  // 同步状态
   useEffect(() => {
     setIsListening(speechListening);
     setRecognitionError(speechError);
     setBrowserSupport(speechSupported);
   }, [speechListening, speechError, speechSupported]);
 
-  // Edge浏览器兼容性检查
   useEffect(() => {
     const userAgent = navigator.userAgent;
     const isEdge = /Edg\/\d+/.test(userAgent);
@@ -1587,7 +1269,6 @@ const HCIExperimentPlatform = () => {
     }
   }, []);
 
-  // 处理麦克风点击
   const handleMicClick = useCallback(() => {
     if (isListening) {
       stopListening();
@@ -1596,19 +1277,16 @@ const HCIExperimentPlatform = () => {
     }
   }, [isListening, startListening, stopListening]);
 
-  // 重试语音识别
   const retrySpeechRecognition = useCallback(() => {
     setRecognitionError('');
     startListening();
   }, [startListening]);
 
-  // 切换到文本模式
   const switchToTextMode = useCallback(() => {
     setSelectedInputMode('text');
     setRecognitionError('');
   }, []);
 
-  // 切换到语音模式
   const switchToVoiceMode = useCallback(() => {
     if (!browserSupport) {
       alert('您的浏览器不支持语音识别，请使用Chrome或Edge浏览器');
@@ -1617,7 +1295,6 @@ const HCIExperimentPlatform = () => {
     setSelectedInputMode('voice');
   }, [browserSupport]);
 
-  // 数据上传
   const uploadToCloud = useCallback(async (msg: Message) => {
     if (!supabase) {
       console.warn('⚠️ Supabase 未初始化，数据无法保存');
@@ -1633,7 +1310,6 @@ const HCIExperimentPlatform = () => {
         latency: msg.latency
       });
       
-      // @ts-ignore - Supabase 类型定义可能不完整，但运行时是正确的
       const { data, error } = await supabase.from('experiment_logs').insert({
         session_id: msg.sessionId,
         participant_name: msg.participantName,
@@ -1644,23 +1320,20 @@ const HCIExperimentPlatform = () => {
         content: msg.content,
         latency: msg.latency || 0,
         timestamp: new Date(msg.timestamp).toISOString(),
-        input_mode: msg.inputMode, // 添加输入模式
-        actual_model_used: msg.actualModelUsed, // 添加实际使用的模型
+        input_mode: msg.inputMode,
+        actual_model_used: msg.actualModelUsed,
       } as any);
       
       if (error) {
         console.error('❌ Supabase 上传错误:', error);
-        // 不抛出错误，避免影响用户体验
       } else {
         console.log('✅ 数据上传成功:', data);
       }
     } catch (error: any) { 
       console.error('❌ 上传失败:', error); 
-      // 不抛出错误，避免影响用户体验
     }
   }, [supabase]);
 
-  // 登录处理
   const handleLogin = useCallback(() => {
     if (!participantName.trim()) {
       alert('请输入姓名');
@@ -1672,16 +1345,13 @@ const HCIExperimentPlatform = () => {
       setSelectedInputMode('text');
     }
     
-    // 分配实验条件
     const condition: Condition = Math.random() > 0.5 ? 'AI_Model' : 'Human_Partner';
     setAssignedCondition(condition);
     
-    // 分配或获取已绑定的语音模型（确保使用最新的配置）
     let voiceModel = assignedVoiceModel;
     const storedModelId = localStorage.getItem(`hci_user_model_${userId}`);
     
     if (storedModelId) {
-      // 如果用户已绑定模型，从最新的 voiceModelList 中查找（确保配置是最新的）
       const latestModel = voiceModelList.find(m => m.id === storedModelId);
       if (latestModel) {
         voiceModel = latestModel;
@@ -1692,18 +1362,15 @@ const HCIExperimentPlatform = () => {
           hasUrl: !!voiceModel.recognitionUrl
         });
       } else {
-        // 如果找不到，随机分配一个
         const randomIndex = Math.floor(Math.random() * voiceModelList.length);
         voiceModel = voiceModelList[randomIndex];
         console.log('⚠️ 用户绑定的模型不存在，随机分配新模型:', voiceModel.id);
       }
     } else if (!voiceModel) {
-      // 如果用户没有绑定模型，随机分配一个
       const randomIndex = Math.floor(Math.random() * voiceModelList.length);
       voiceModel = voiceModelList[randomIndex];
       console.log('🎲 随机分配新模型:', voiceModel.id);
     } else if (voiceModel) {
-      // 如果 assignedVoiceModel 存在，但需要确保它是最新的
       const latestModel = voiceModelList.find(m => m.id === voiceModel!.id);
       if (latestModel && latestModel !== voiceModel) {
         voiceModel = latestModel;
@@ -1714,7 +1381,6 @@ const HCIExperimentPlatform = () => {
       }
     }
     
-    // 确保 voiceModel 不为 null
     if (!voiceModel) {
       console.error('❌ 无法分配语音模型，使用默认模型');
       voiceModel = voiceModelList[0] || voiceModelList[0];
@@ -1726,7 +1392,6 @@ const HCIExperimentPlatform = () => {
     setCurrentView('participant');
   }, [participantName, selectedInputMode, browserSupport, voiceModelList, assignedVoiceModel, userId]);
 
-  // 核心对话逻辑
   const processMessageExchange = useCallback(async (userText: string) => {
     if (!assignedVoiceModel) {
       alert('未分配语音模型，请重新登录');
@@ -2000,12 +1665,10 @@ const HCIExperimentPlatform = () => {
     }
   }, [sessionId, participantName, userId, assignedVoiceModel, assignedCondition, selectedInputMode, logs, uploadToCloud]);
   
-  // 保存 processMessageExchange 到 ref，供语音识别使用
   useEffect(() => {
     processMessageExchangeRef.current = processMessageExchange;
   }, [processMessageExchange]);
 
-  // 语音识别结果自动提交
   useEffect(() => {
     console.log('自动提交 useEffect 触发:', {
       transcript,
@@ -2017,7 +1680,6 @@ const HCIExperimentPlatform = () => {
       submittedTranscript: submittedTranscriptRef.current
     });
     
-    // 当识别完成且有最终结果时，自动提交
     if (
       selectedInputMode === 'voice' && 
       transcript && 
@@ -2028,21 +1690,17 @@ const HCIExperimentPlatform = () => {
       interactionState === 'idle' &&
       currentView === 'participant'
     ) {
-      // 检查是否是最终结果（不是临时结果）
-      // 如果 transcript 有值且识别已停止，说明是最终结果
       const finalText = transcript.trim();
       if (finalText && finalText.length > 0) {
         console.log('✅ 条件满足，准备自动提交语音识别结果:', finalText);
         submittedTranscriptRef.current = finalText;
         previousTranscriptRef.current = finalText;
-        // 延迟一点确保状态稳定
         setTimeout(() => {
           console.log('🚀 开始处理消息:', finalText);
           processMessageExchange(finalText);
         }, 500);
       }
     } else {
-      // 记录为什么没有提交
       if (selectedInputMode !== 'voice') {
         console.log('❌ 未提交：不是语音模式');
       } else if (!transcript || !transcript.trim()) {
@@ -2065,7 +1723,6 @@ const HCIExperimentPlatform = () => {
     }
   }, [transcript, isListening, selectedInputMode, interactionState, currentView, processMessageExchange]);
 
-  // 管理员视图
   const AdminView = () => {
     const addNewVoiceModel = () => setVoiceModelList([...voiceModelList, {
       id: `model_${Date.now()}`,
@@ -2107,7 +1764,6 @@ const HCIExperimentPlatform = () => {
         return m;
       });
       setVoiceModelList(updated);
-      // 立即保存到 localStorage
       try {
         localStorage.setItem('hci_voice_model_list', JSON.stringify(updated));
         console.log('💾 配置已更新并保存:', { id, field, value });
@@ -2116,7 +1772,6 @@ const HCIExperimentPlatform = () => {
       }
     };
 
-    // Edge浏览器诊断工具
     const EdgeDiagnostic = () => {
       const [diagnosticInfo, setDiagnosticInfo] = useState('');
       const [isRunning, setIsRunning] = useState(false);
@@ -2560,7 +2215,6 @@ const HCIExperimentPlatform = () => {
     );
   };
 
-  // 登录视图
   const LoginView = () => {
     const [showEdgeTips, setShowEdgeTips] = useState(false);
     
@@ -2703,7 +2357,6 @@ const HCIExperimentPlatform = () => {
     );
   };
 
-  // 参与者视图
   const ParticipantView = () => {
     const chatContainerRef = useRef<HTMLDivElement>(null);
     
@@ -3055,7 +2708,6 @@ const HCIExperimentPlatform = () => {
     );
   };
 
-  // 感谢视图
   const ThankYouView = () => (
     <div className="min-h-screen bg-gradient-to-b from-green-50 to-white flex flex-col items-center justify-center p-6 md:p-8">
       <div className="bg-white p-8 md:p-12 rounded-2xl shadow-2xl max-w-md text-center border border-gray-100">
@@ -3103,7 +2755,6 @@ const HCIExperimentPlatform = () => {
     </div>
   );
 
-  // 数据仪表板视图
   const DashboardView = () => {
     const [statistics, setStatistics] = useState({
       totalMessages: 0,
