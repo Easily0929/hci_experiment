@@ -275,22 +275,50 @@ const useEdgeSpeechRecognition = (
   const reconnectDelayRef = useRef(1000);
   const isManualStopRef = useRef(false);
   
-  // 腾讯云签名生成函数（简化版，生产环境应通过后端获取）
-  const generateTencentCloudSignature = useCallback((secretId: string, secretKey: string, timestamp: number, nonce: number) => {
-    // 注意：这是简化版本，仅用于测试
-    // 生产环境应该通过后端 API 获取签名，避免在前端暴露 SecretKey
+  // 从后端 API 获取腾讯云签名（推荐方案，更安全）
+  const getTencentCloudSignature = useCallback(async (
+    secretId: string,
+    appId: string,
+    params: {
+      engine_model_type?: string;
+      voice_format?: string;
+      needvad?: string;
+      filter_dirty?: string;
+      filter_modal?: string;
+      filter_punc?: string;
+      convert_num_mode?: string;
+      timestamp?: number;
+      nonce?: number;
+      voice_id?: string;
+    }
+  ): Promise<{ signature: string; params: Record<string, string> } | null> => {
     try {
-      // 构建签名字符串（根据腾讯云文档格式）
-      const signString = `secretId=${secretId}&timestamp=${timestamp}&nonce=${nonce}`;
-      
-      // 使用 HMAC-SHA1 签名（需要 crypto-js 库，这里使用简化方式）
-      // 实际应该使用：CryptoJS.HmacSHA1(signString, secretKey).toString()
-      // 为了简化，这里返回一个基础签名（生产环境必须使用正确的 HMAC）
-      const signature = btoa(signString + secretKey).substring(0, 40);
-      return signature;
-    } catch (err) {
-      console.error('生成签名失败:', err);
-      return '';
+      const response = await fetch('/api/tencent-signature', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          secretId,
+          appId,
+          params,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return {
+        signature: data.signature,
+        params: data.params,
+      };
+    } catch (err: any) {
+      console.error('从后端获取签名失败:', err);
+      setError(`获取签名失败: ${err.message}\n\n请检查：\n1. 后端 API 是否正常运行\n2. 环境变量 TENCENT_CLOUD_SECRET_KEY 是否已配置\n3. 网络连接是否正常`);
+      return null;
     }
   }, []);
   
@@ -427,23 +455,73 @@ const useEdgeSpeechRecognition = (
       }
 
       // 构建 WebSocket URL
-      // 注意：如果 recognitionUrl 已经包含完整签名，直接使用
-      // 否则需要生成签名（简化版，生产环境应通过后端获取）
+      // 使用后端 API 获取签名（更安全，避免在前端暴露 SecretKey）
       let wsUrl = voiceModel.recognitionUrl;
       
-      // 如果 URL 不包含签名参数，尝试生成（仅用于测试）
-      if (!wsUrl.includes('signature=') && !wsUrl.includes('?')) {
+      try {
+        // 解析基础URL（提取 appId 和基础路径）
+        const urlObj = new URL(wsUrl);
+        const baseUrl = `${urlObj.protocol}//${urlObj.host}${urlObj.pathname}`;
+        
+        // 从路径中提取 appId（格式：/asr/v2/{appId}）
+        const pathMatch = urlObj.pathname.match(/\/asr\/v2\/(\d+)/);
+        if (!pathMatch) {
+          throw new Error('无法从 URL 中提取 AppId，请确保 URL 格式为：wss://asr.cloud.tencent.com/asr/v2/{appId}');
+        }
+        const appId = pathMatch[1];
+        
+        // 获取已有参数（保留配置参数）
+        const existingParams = new URLSearchParams(urlObj.search);
+        const engineModelType = existingParams.get('engine_model_type') || '16k_zh';
+        const voiceFormat = existingParams.get('voice_format') || '1';
+        const needvad = existingParams.get('needvad') || '1';
+        const filterDirty = existingParams.get('filter_dirty') || '0';
+        const filterModal = existingParams.get('filter_modal') || '0';
+        const filterPunc = existingParams.get('filter_punc') || '0';
+        const convertNumMode = existingParams.get('convert_num_mode') || '1';
+        
+        // 生成 voice_id（UUID格式）
+        const voiceId = uuidv4();
         const timestamp = Math.floor(Date.now() / 1000);
         const nonce = Math.floor(Math.random() * 1000000);
-        // 注意：这里需要 SecretKey，但为了安全，生产环境应该通过后端获取签名
-        // 这里假设 recognitionKey 是 SecretId，还需要 SecretKey（应该从后端获取）
-        const signature = generateTencentCloudSignature(
-          voiceModel.recognitionKey,
-          voiceModel.recognitionKey, // 简化：实际应该是 SecretKey
-          timestamp,
-          nonce
+        
+        // 从后端 API 获取签名
+        console.log('🔐 正在从后端获取签名...');
+        const signatureResult = await getTencentCloudSignature(
+          voiceModel.recognitionKey, // SecretId
+          appId,
+          {
+            engine_model_type: engineModelType,
+            voice_format: voiceFormat,
+            needvad: needvad,
+            filter_dirty: filterDirty,
+            filter_modal: filterModal,
+            filter_punc: filterPunc,
+            convert_num_mode: convertNumMode,
+            timestamp: timestamp,
+            nonce: nonce,
+            voice_id: voiceId,
+          }
         );
-        wsUrl = `${wsUrl}?secretId=${voiceModel.recognitionKey}&timestamp=${timestamp}&nonce=${nonce}&signature=${signature}`;
+        
+        if (!signatureResult) {
+          throw new Error('获取签名失败，请检查后端配置');
+        }
+        
+        // 使用后端返回的参数和签名构建 URL
+        const params = new URLSearchParams();
+        Object.entries(signatureResult.params).forEach(([key, value]) => {
+          params.append(key, value);
+        });
+        params.set('signature', signatureResult.signature);
+        
+        wsUrl = `${baseUrl}?${params.toString()}`;
+        console.log('✅ 签名获取成功，WebSocket URL 已构建');
+      } catch (err: any) {
+        console.error('构建 WebSocket URL 失败:', err);
+        setError(`构建连接 URL 失败: ${err.message}\n\n请检查：\n1. 识别服务 URL 格式是否正确（应包含 AppId）\n2. 后端 API 是否正常运行\n3. 环境变量是否已配置`);
+        setIsListening(false);
+        return;
       }
       
       console.log('🔌 连接腾讯云 WebSocket...', wsUrl.substring(0, 80) + '...');
@@ -714,7 +792,7 @@ const useEdgeSpeechRecognition = (
         setIsListening(false);
       }
     }
-  }, [voiceModel, checkMicrophonePermission, onResult, generateTencentCloudSignature]);
+  }, [voiceModel, checkMicrophonePermission, onResult, getTencentCloudSignature]);
 
   const startListening = useCallback(async () => {
     console.log('🎤 开始启动语音识别...');
@@ -768,6 +846,13 @@ const useEdgeSpeechRecognition = (
     }
 
     // 根据配置选择识别方式
+    console.log('🔍 检查识别配置:', {
+      recognitionType: voiceModel?.recognitionType,
+      recognitionUrl: voiceModel?.recognitionUrl,
+      recognitionKey: voiceModel?.recognitionKey ? '已设置' : '未设置',
+      fullModel: voiceModel
+    });
+    
     if (voiceModel?.recognitionType === 'custom' && voiceModel.recognitionUrl) {
       // 使用腾讯云语音识别
       console.log('✅ 使用腾讯云语音识别');
@@ -776,7 +861,13 @@ const useEdgeSpeechRecognition = (
     }
     
     // 使用浏览器原生语音识别
-    console.log('✅ 使用浏览器原生语音识别');
+    console.warn('⚠️ 使用浏览器原生语音识别', {
+      reason: !voiceModel?.recognitionType || voiceModel.recognitionType !== 'custom' 
+        ? '识别类型不是"custom"（腾讯云）' 
+        : '识别服务 URL 未配置',
+      recognitionType: voiceModel?.recognitionType,
+      hasUrl: !!voiceModel?.recognitionUrl
+    });
     
     const userAgent = navigator.userAgent;
     const isEdge = /Edg\/\d+/.test(userAgent);
