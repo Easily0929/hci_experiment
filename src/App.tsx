@@ -850,8 +850,33 @@ const useEdgeSpeechRecognition = (
       recognitionType: voiceModel?.recognitionType,
       recognitionUrl: voiceModel?.recognitionUrl,
       recognitionKey: voiceModel?.recognitionKey ? '已设置' : '未设置',
+      hasModel: !!voiceModel,
+      modelId: voiceModel?.id,
+      modelAlias: voiceModel?.alias,
       fullModel: voiceModel
     });
+    
+    // 如果配置不正确，给出明确提示
+    if (!voiceModel) {
+      console.error('❌ 语音模型未分配！');
+      setError('语音模型未分配，请重新登录');
+      setIsListening(false);
+      return;
+    }
+    
+    if (voiceModel.recognitionType === 'custom' && !voiceModel.recognitionUrl) {
+      console.error('❌ 腾讯云识别 URL 未配置！');
+      setError('腾讯云识别服务 URL 未配置。请进入管理员界面配置识别服务 URL。');
+      setIsListening(false);
+      return;
+    }
+    
+    if (voiceModel.recognitionType === 'custom' && !voiceModel.recognitionKey) {
+      console.error('❌ 腾讯云 SecretId 未配置！');
+      setError('腾讯云 SecretId 未配置。请进入管理员界面配置 SecretId。');
+      setIsListening(false);
+      return;
+    }
     
     if (voiceModel?.recognitionType === 'custom' && voiceModel.recognitionUrl) {
       // 使用腾讯云语音识别
@@ -1369,63 +1394,117 @@ const HCIExperimentPlatform = () => {
   const supabase = getSupabaseClient();
 
   // 语音大模型配置（使用阿里云 DashScope API）
-  const [voiceModelList, setVoiceModelList] = useState<VoiceModelConfig[]>([
-    {
-      id: 'model_1',
-      alias: 'AI助手 - Qwen-TTS-Realtime (Cherry)',
-      recognitionType: 'browser',
-      synthesisType: 'custom',
-      synthesisUrl: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/realtime',
-      synthesisKey: 'sk-c5e6833061944016adc237cc5bc92da8',
-      synthesisVoice: 'Cherry',
-      textLLM: {
-        url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-        key: 'sk-c5e6833061944016adc237cc5bc92da8',
-        modelName: 'qwen-plus',
-        systemPrompt: '你是一个温柔、友善的AI助手，说话语气温和，用词礼貌。请用中文回复。'
+  // 从 localStorage 读取配置，如果没有则使用默认值
+  const [voiceModelList, setVoiceModelList] = useState<VoiceModelConfig[]>(() => {
+    try {
+      const stored = localStorage.getItem('hci_voice_model_list');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        console.log('📦 从 localStorage 加载语音模型配置:', parsed);
+        return parsed;
       }
-    },
-    {
-      id: 'model_2',
-      alias: 'AI助手 - Qwen-TTS-Realtime (Ethan)',
-      recognitionType: 'browser',
-      synthesisType: 'custom',
-      synthesisUrl: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/realtime',
-      synthesisKey: 'sk-c5e6833061944016adc237cc5bc92da8',
-      synthesisVoice: 'Ethan',
-      textLLM: {
-        url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-        key: 'sk-c5e6833061944016adc237cc5bc92da8',
-        modelName: 'qwen-plus',
-        systemPrompt: '你是一个专业、严谨的AI助手，回答问题准确，逻辑清晰。请用中文回复。'
-      }
-    },
-    {
-      id: 'model_3',
-      alias: '人类伙伴 - Qwen-TTS-Realtime (Serena)',
-      recognitionType: 'browser',
-      synthesisType: 'custom',
-      synthesisUrl: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/realtime',
-      synthesisKey: 'sk-c5e6833061944016adc237cc5bc92da8',
-      synthesisVoice: 'Serena',
-      textLLM: {
-        url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-        key: 'sk-c5e6833061944016adc237cc5bc92da8',
-        modelName: 'qwen-plus',
-        systemPrompt: '你正在假装是一个人类参与者，说话要自然、随意，可以有一些口头禅和停顿。请用中文回复，不要透露你是AI。'
-      }
-    },
-  ]);
+    } catch (e) {
+      console.warn('读取语音模型配置失败，使用默认值:', e);
+    }
+    // 默认配置
+    return [
+      {
+        id: 'model_1',
+        alias: 'AI助手 - Qwen-TTS-Realtime (Cherry)',
+        recognitionType: 'browser',
+        synthesisType: 'custom',
+        synthesisUrl: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/realtime',
+        synthesisKey: 'sk-c5e6833061944016adc237cc5bc92da8',
+        synthesisVoice: 'Cherry',
+        textLLM: {
+          url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+          key: 'sk-c5e6833061944016adc237cc5bc92da8',
+          modelName: 'qwen-plus',
+          systemPrompt: '你是一个温柔、友善的AI助手，说话语气温和，用词礼貌。请用中文回复。'
+        }
+      },
+      {
+        id: 'model_2',
+        alias: 'AI助手 - Qwen-TTS-Realtime (Ethan)',
+        recognitionType: 'browser',
+        synthesisType: 'custom',
+        synthesisUrl: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/realtime',
+        synthesisKey: 'sk-c5e6833061944016adc237cc5bc92da8',
+        synthesisVoice: 'Ethan',
+        textLLM: {
+          url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+          key: 'sk-c5e6833061944016adc237cc5bc92da8',
+          modelName: 'qwen-plus',
+          systemPrompt: '你是一个专业、严谨的AI助手，回答问题准确，逻辑清晰。请用中文回复。'
+        }
+      },
+      {
+        id: 'model_3',
+        alias: '人类伙伴 - Qwen-TTS-Realtime (Serena)',
+        recognitionType: 'browser',
+        synthesisType: 'custom',
+        synthesisUrl: 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/realtime',
+        synthesisKey: 'sk-c5e6833061944016adc237cc5bc92da8',
+        synthesisVoice: 'Serena',
+        textLLM: {
+          url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+          key: 'sk-c5e6833061944016adc237cc5bc92da8',
+          modelName: 'qwen-plus',
+          systemPrompt: '你正在假装是一个人类参与者，说话要自然、随意，可以有一些口头禅和停顿。请用中文回复，不要透露你是AI。'
+        }
+      },
+    ];
+  });
+
+  // 当 voiceModelList 更新时，自动保存到 localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('hci_voice_model_list', JSON.stringify(voiceModelList));
+      console.log('💾 语音模型配置已保存到 localStorage');
+    } catch (e) {
+      console.error('保存语音模型配置失败:', e);
+    }
+  }, [voiceModelList]);
 
   // 当前用户绑定的语音模型
   const [assignedVoiceModel, setAssignedVoiceModel] = useState<VoiceModelConfig | null>(() => {
     const storedModelId = localStorage.getItem(`hci_user_model_${userId}`);
     if (storedModelId) {
+      // 先从 localStorage 读取最新的 voiceModelList
+      try {
+        const storedList = localStorage.getItem('hci_voice_model_list');
+        if (storedList) {
+          const parsedList = JSON.parse(storedList);
+          const model = parsedList.find((m: VoiceModelConfig) => m.id === storedModelId);
+          if (model) {
+            console.log('📦 从 localStorage 加载用户绑定的模型:', model);
+            return model;
+          }
+        }
+      } catch (e) {
+        console.warn('从 localStorage 读取模型列表失败:', e);
+      }
+      // 如果 localStorage 读取失败，从 voiceModelList 查找
       const model = voiceModelList.find(m => m.id === storedModelId);
       if (model) return model;
     }
     return null;
   });
+
+  // 当 voiceModelList 更新时，同步更新 assignedVoiceModel（如果用户已绑定模型）
+  useEffect(() => {
+    const storedModelId = localStorage.getItem(`hci_user_model_${userId}`);
+    if (storedModelId && assignedVoiceModel) {
+      const updatedModel = voiceModelList.find(m => m.id === storedModelId);
+      if (updatedModel && updatedModel !== assignedVoiceModel) {
+        console.log('🔄 检测到模型配置更新，同步 assignedVoiceModel:', {
+          old: assignedVoiceModel.recognitionType,
+          new: updatedModel.recognitionType
+        });
+        setAssignedVoiceModel(updatedModel);
+      }
+    }
+  }, [voiceModelList, userId, assignedVoiceModel]);
   
   // 使用修复后的语音识别Hook（传入当前语音模型配置）
   const {
@@ -1583,14 +1662,52 @@ const HCIExperimentPlatform = () => {
     const condition: Condition = Math.random() > 0.5 ? 'AI_Model' : 'Human_Partner';
     setAssignedCondition(condition);
     
-    // 分配或获取已绑定的语音模型
+    // 分配或获取已绑定的语音模型（确保使用最新的配置）
     let voiceModel = assignedVoiceModel;
-    if (!voiceModel) {
+    const storedModelId = localStorage.getItem(`hci_user_model_${userId}`);
+    
+    if (storedModelId) {
+      // 如果用户已绑定模型，从最新的 voiceModelList 中查找（确保配置是最新的）
+      const latestModel = voiceModelList.find(m => m.id === storedModelId);
+      if (latestModel) {
+        voiceModel = latestModel;
+        console.log('🔄 使用用户已绑定的模型（最新配置）:', {
+          id: voiceModel.id,
+          alias: voiceModel.alias,
+          recognitionType: voiceModel.recognitionType,
+          hasUrl: !!voiceModel.recognitionUrl
+        });
+      } else {
+        // 如果找不到，随机分配一个
+        const randomIndex = Math.floor(Math.random() * voiceModelList.length);
+        voiceModel = voiceModelList[randomIndex];
+        console.log('⚠️ 用户绑定的模型不存在，随机分配新模型:', voiceModel.id);
+      }
+    } else if (!voiceModel) {
+      // 如果用户没有绑定模型，随机分配一个
       const randomIndex = Math.floor(Math.random() * voiceModelList.length);
       voiceModel = voiceModelList[randomIndex];
-      setAssignedVoiceModel(voiceModel);
-      localStorage.setItem(`hci_user_model_${userId}`, voiceModel.id);
+      console.log('🎲 随机分配新模型:', voiceModel.id);
+    } else if (voiceModel) {
+      // 如果 assignedVoiceModel 存在，但需要确保它是最新的
+      const latestModel = voiceModelList.find(m => m.id === voiceModel!.id);
+      if (latestModel && latestModel !== voiceModel) {
+        voiceModel = latestModel;
+        console.log('🔄 更新已绑定模型为最新配置:', {
+          old: assignedVoiceModel?.recognitionType,
+          new: latestModel.recognitionType
+        });
+      }
     }
+    
+    // 确保 voiceModel 不为 null
+    if (!voiceModel) {
+      console.error('❌ 无法分配语音模型，使用默认模型');
+      voiceModel = voiceModelList[0] || voiceModelList[0];
+    }
+    
+    setAssignedVoiceModel(voiceModel);
+    localStorage.setItem(`hci_user_model_${userId}`, voiceModel.id);
     
     setCurrentView('participant');
   }, [participantName, selectedInputMode, browserSupport, voiceModelList, assignedVoiceModel, userId]);
@@ -1959,7 +2076,7 @@ const HCIExperimentPlatform = () => {
     };
     
     const updateVoiceModel = (id: string, field: string, value: any) => {
-      setVoiceModelList(voiceModelList.map(m => {
+      const updated = voiceModelList.map(m => {
         if (m.id === id) {
           if (field.includes('.')) {
             const [parent, child] = field.split('.');
@@ -1974,7 +2091,15 @@ const HCIExperimentPlatform = () => {
           return { ...m, [field]: value };
         }
         return m;
-      }));
+      });
+      setVoiceModelList(updated);
+      // 立即保存到 localStorage
+      try {
+        localStorage.setItem('hci_voice_model_list', JSON.stringify(updated));
+        console.log('💾 配置已更新并保存:', { id, field, value });
+      } catch (e) {
+        console.error('保存配置失败:', e);
+      }
     };
 
     // Edge浏览器诊断工具
