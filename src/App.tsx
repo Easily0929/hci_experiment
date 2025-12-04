@@ -471,7 +471,9 @@ const useEdgeSpeechRecognition = (
 
       ws.onopen = () => {
         clearTimeout(connectTimeout);
-        console.log('✅ 腾讯云 WebSocket 连接成功');
+        console.log('✅ 腾讯云 WebSocket 连接成功，等待握手响应...');
+        // 注意：根据腾讯云文档，连接成功后后台会自动返回握手响应
+        // 不需要发送初始化消息，等待后台返回 {"code":0,"message":"success","voice_id":"..."}
         setIsListening(true);
         hasResultRef.current = false;
         if (!isReconnect) {
@@ -479,28 +481,6 @@ const useEdgeSpeechRecognition = (
         }
         reconnectAttemptsRef.current = 0; // 重置重连计数
         reconnectDelayRef.current = 1000; // 重置延迟
-        
-        // 发送初始化消息（根据腾讯云 API 文档格式）
-        const initMessage = {
-          Action: 'Init',
-          AppId: 0, // 需要从配置获取或从 URL 解析
-          SecretId: voiceModel.recognitionKey,
-          EngineModelType: voiceModel.recognitionModel || '16k_zh',
-          VoiceFormat: 'pcm',
-          SampleRate: 16000,
-          HotwordId: '', // 热词ID（可选）
-          FilterDirty: 1, // 过滤脏词
-          FilterModal: 1, // 过滤语气词
-          FilterPunc: 0, // 不过滤标点
-          ConvertNumMode: 1 // 数字转换模式
-        };
-        
-        try {
-          ws.send(JSON.stringify(initMessage));
-          console.log('📤 已发送初始化消息');
-        } catch (err) {
-          console.error('发送初始化消息失败:', err);
-        }
         
         // 设置识别超时（30秒）
         timeoutRef.current = setTimeout(() => {
@@ -510,9 +490,18 @@ const useEdgeSpeechRecognition = (
             if (!result.final.trim() && !result.interim.trim()) {
               setError('录音超时（30秒）。\n\n请尝试：\n1. 确保麦克风正常工作\n2. 说话时声音清晰、音量适中\n3. 检查麦克风音量设置\n4. 在安静环境下使用');
             }
-            // 停止识别
-            if (websocketRef.current) {
-              websocketRef.current.close();
+            // 发送结束消息后关闭连接
+            if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
+              try {
+                websocketRef.current.send(JSON.stringify({ type: 'end' }));
+              } catch (err) {
+                console.warn('发送结束消息失败:', err);
+              }
+              setTimeout(() => {
+                if (websocketRef.current) {
+                  websocketRef.current.close();
+                }
+              }, 500);
             }
           }
         }, 30000);
@@ -521,19 +510,20 @@ const useEdgeSpeechRecognition = (
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          console.log('📨 收到腾讯云识别结果:', data);
+          console.log('📨 收到腾讯云消息:', data);
 
-          // 处理初始化响应
-          if (data.Response?.RequestId) {
-            console.log('✅ 初始化成功，RequestId:', data.Response.RequestId);
+          // 处理握手响应（根据腾讯云文档格式）
+          if (data.code === 0 && data.voice_id && !data.result) {
+            console.log('✅ 握手成功，voice_id:', data.voice_id);
+            // 握手成功，可以开始发送音频数据
             return;
           }
 
-          // 处理识别结果
-          if (data.Response?.Result) {
-            const result = data.Response.Result;
-            const text = result.Text || '';
-            const isFinal = result.Final === 1 || result.VoiceIdStr; // 最终结果判断
+          // 处理识别结果（根据腾讯云文档格式）
+          if (data.code === 0 && data.result) {
+            const result = data.result;
+            const text = result.voice_text_str || '';
+            const isFinal = data.final === 1; // 最终结果判断
 
             if (text) {
               if (isFinal) {
@@ -548,10 +538,25 @@ const useEdgeSpeechRecognition = (
                   timeoutRef.current = null;
                 }
                 
-                // 停止识别
+                // 根据腾讯云文档，收到最终结果后发送结束消息
                 isManualStopRef.current = true;
-                if (websocketRef.current) {
-                  websocketRef.current.close();
+                if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
+                  try {
+                    // 发送结束消息，通知后台结束识别
+                    websocketRef.current.send(JSON.stringify({ type: 'end' }));
+                    console.log('📤 已发送结束识别消息');
+                    // 等待后台返回 final=1 后关闭连接
+                    setTimeout(() => {
+                      if (websocketRef.current) {
+                        websocketRef.current.close();
+                      }
+                    }, 1000);
+                  } catch (err) {
+                    console.warn('发送结束消息失败:', err);
+                    if (websocketRef.current) {
+                      websocketRef.current.close();
+                    }
+                  }
                 }
                 if (onResult) {
                   setTimeout(() => onResult(text), 200);
@@ -561,10 +566,36 @@ const useEdgeSpeechRecognition = (
                 setTranscript(text);
                 console.log('⏳ 腾讯云临时识别结果:', text);
               }
+            } else if (isFinal) {
+              // 收到 final=1 但没有文本，表示识别完成（后台已处理完所有音频）
+              console.log('✅ 识别完成（final=1）');
+              const finalText = transcriptResultRef.current.final.trim() || transcriptResultRef.current.interim.trim();
+              if (finalText) {
+                hasResultRef.current = true;
+                setTranscript(finalText);
+                if (onResult) {
+                  setTimeout(() => onResult(finalText), 200);
+                }
+              }
+              // 清理超时
+              if (timeoutRef.current) {
+                clearTimeout(timeoutRef.current);
+                timeoutRef.current = null;
+              }
+              isManualStopRef.current = true;
+              // 后台已返回 final=1，可以关闭连接
+              if (websocketRef.current) {
+                setTimeout(() => {
+                  if (websocketRef.current) {
+                    websocketRef.current.close();
+                  }
+                }, 500);
+              }
             }
-          } else if (data.Response?.Error) {
-            const errorMsg = data.Response.Error.Message || '未知错误';
-            const errorCode = data.Response.Error.Code || '';
+          } else if (data.code !== 0) {
+            // 处理错误（根据腾讯云文档格式）
+            const errorMsg = data.message || '未知错误';
+            const errorCode = data.code;
             console.error('❌ 腾讯云识别错误:', errorCode, errorMsg);
             
             // 清理超时
@@ -574,20 +605,29 @@ const useEdgeSpeechRecognition = (
             }
             
             // 根据错误码决定是否重连
-            if (errorCode === 'InvalidParameter' || errorCode === 'AuthFailure') {
-              setError(`腾讯云配置错误: ${errorMsg}\n\n请检查：\n1. SecretId 是否正确\n2. 识别服务 URL 是否正确\n3. 是否已开通实时语音识别服务`);
+            if (errorCode === 4002 || errorCode === 4001) {
+              // 鉴权失败或参数不合法
+              setError(`腾讯云配置错误: ${errorMsg}\n\n请检查：\n1. SecretId 是否正确\n2. 识别服务 URL 是否正确\n3. 签名是否正确\n4. 是否已开通实时语音识别服务`);
+              setIsListening(false);
+            } else if (errorCode === 4003) {
+              // AppID 服务未开通
+              setError(`服务未开通: ${errorMsg}\n\n请在腾讯云控制台开通实时语音识别服务`);
+              setIsListening(false);
+            } else if (errorCode === 4004) {
+              // 资源包耗尽
+              setError(`资源包耗尽: ${errorMsg}\n\n请购买资源包或开通后付费`);
               setIsListening(false);
             } else if (!isManualStopRef.current && reconnectAttemptsRef.current < maxReconnectAttempts) {
               // 可恢复的错误，尝试重连
               console.log('🔄 尝试重连...');
               startTencentCloudASR(true);
             } else {
-              setError(`腾讯云识别错误: ${errorMsg}`);
+              setError(`腾讯云识别错误 (${errorCode}): ${errorMsg}`);
               setIsListening(false);
             }
           }
         } catch (err) {
-          console.error('解析腾讯云响应失败:', err);
+          console.error('解析腾讯云响应失败:', err, event.data);
         }
       };
 
@@ -1115,7 +1155,24 @@ const useEdgeSpeechRecognition = (
     if (websocketRef.current) {
       try {
         isManualStopRef.current = true; // 标记为手动停止
-        websocketRef.current.close();
+        // 根据腾讯云文档，需要先发送结束消息
+        if (websocketRef.current.readyState === WebSocket.OPEN) {
+          try {
+            websocketRef.current.send(JSON.stringify({ type: 'end' }));
+            console.log('📤 已发送结束识别消息');
+            // 等待一小段时间后关闭连接
+            setTimeout(() => {
+              if (websocketRef.current) {
+                websocketRef.current.close();
+              }
+            }, 500);
+          } catch (err) {
+            console.warn('发送结束消息失败:', err);
+            websocketRef.current.close();
+          }
+        } else {
+          websocketRef.current.close();
+        }
       } catch (e) {
         console.log('关闭 WebSocket 时出错:', e);
       }
