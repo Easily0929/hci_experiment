@@ -878,22 +878,29 @@ const useEdgeSpeechRecognition = (
       return;
     }
     
-    if (voiceModel?.recognitionType === 'custom' && voiceModel.recognitionUrl) {
-      // 使用腾讯云语音识别
-      console.log('✅ 使用腾讯云语音识别');
-      await startTencentCloudASR();
+    // 强制使用腾讯云语音识别（不再使用浏览器原生识别）
+    if (!voiceModel.recognitionUrl) {
+      console.error('❌ 腾讯云识别 URL 未配置！');
+      setError('腾讯云识别服务 URL 未配置。请进入管理员界面配置识别服务 URL。');
+      setIsListening(false);
       return;
     }
     
-    // 使用浏览器原生语音识别
-    console.warn('⚠️ 使用浏览器原生语音识别', {
-      reason: !voiceModel?.recognitionType || voiceModel.recognitionType !== 'custom' 
-        ? '识别类型不是"custom"（腾讯云）' 
-        : '识别服务 URL 未配置',
-      recognitionType: voiceModel?.recognitionType,
-      hasUrl: !!voiceModel?.recognitionUrl
-    });
+    if (!voiceModel.recognitionKey) {
+      console.error('❌ 腾讯云 SecretId 未配置！');
+      setError('腾讯云 SecretId 未配置。请进入管理员界面配置 SecretId。');
+      setIsListening(false);
+      return;
+    }
     
+    // 使用腾讯云语音识别
+    console.log('✅ 强制使用腾讯云语音识别（浏览器识别已禁用）');
+    await startTencentCloudASR();
+    return;
+    
+    // ========== 以下浏览器原生识别代码已完全禁用 ==========
+    // 强制使用腾讯云识别，不再使用浏览器 Web Speech API
+    /*
     const userAgent = navigator.userAgent;
     const isEdge = /Edg\/\d+/.test(userAgent);
     const isChrome = /Chrome\/\d+/.test(userAgent) && !/Edg\/\d+/.test(userAgent);
@@ -1248,7 +1255,8 @@ const useEdgeSpeechRecognition = (
       setIsListening(false);
       recognitionRef.current = null;
     }
-  }, [checkMicrophonePermission, voiceModel, startTencentCloudASR]);
+    */
+  }, [voiceModel, startTencentCloudASR]);
   
   const stopListening = useCallback(() => {
     // 清理超时
